@@ -137,7 +137,8 @@ The output will resemble:
     "userId": "038628340774"
 }
 ```
-(This output is stored for reference in the 
+
+(This output is stored for reference in the
 `backbeat_user_credentials` file)
 
 Store the account's credentials using the "id" and "value" fields:
