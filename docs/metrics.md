@@ -5,17 +5,23 @@ HTTP code.
 
 ## Response Codes
 
-|Response | Details     |
-|---------|------------ |
-|200      | OK: Success |
-|403      | AccessDenied: Requested IP address must be defined in 'conf/config.json' in field 'server.healthChecks.allowFrom' |
-|404      | RouteNotFound: Route must be valid. |
-|405      | MethodNotAllowed: The HTTP verb must be GET. |
-|500      | InternalError: This could be caused by one of several components: the API server, Kafka, Zookeeper, Redis, or one of the Producers for a topic. |
+<table><thead><tr><td><strong>Response</strong></td>
+<td><strong>Details</strong></td></tr></thead>
+<tbody>
+<tr><td>200</td><td>OK: Success</td></tr>
+<tr><td>403</td><td>AccessDenied: Requested IP address must be defined in
+'conf/config.json' in field 'server.healthChecks.allowFrom'</td></tr>
+<tr><td>404</td><td>RouteNotFound: Route must be valid.</td></tr>
+<tr><td>405</td><td>MethodNotAllowed: The HTTP verb must be GET.</td></tr>
+<tr><td>500</td><td>InternalError: This could be caused by one of several
+components: the API server, Kafka, Zookeeper, Redis, or one of the Producers
+for a topic.</td></tr>
+</tbody></table>
 
 ## Routes
 
 Routes are organized as:
+
 `/_/metrics/<extension-type>/<site-name>/<metric-type>`
 
 Where:
@@ -43,7 +49,7 @@ of total MB for the specified extension type and site name. The replication
 backlog is the set of objects queued for replication to another site, but for which
 replication is not yet complete.
 
-**Example Output:**
+#### Example Output
 
 ```
 "backlog":{
@@ -65,7 +71,7 @@ of total bytes (in MB) transferred for the specified extension type and site
 name. Completions are only collected up to an `EXPIRY` time, currently set to
 **15 minutes**.
 
-**Example Output:**
+#### Example Output
 
 ```
 "completions":{
@@ -86,7 +92,7 @@ This route returns the current throughput in number of operations per second
 (or number of objects replicating per second) and number of total bytes (in MB)
 completing per second for the specified type and site name.
 
-**Example Output:**
+#### Example Output
 
 ```
 "throughput":{
