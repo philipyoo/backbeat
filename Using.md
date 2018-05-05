@@ -1,4 +1,3 @@
-
 # Using Backbeat
 
 ## Manually Set Up Replication
