@@ -5,18 +5,24 @@ HTTP code.
 
 ## Response Codes
 
-<table><thead><tr><td><strong>Response</strong></td>
-<td><strong>Details</strong></td></tr></thead>
-<tbody>
-<tr><td>200</td><td>OK: Success</td></tr>
-<tr><td>403</td><td>AccessDenied: Requested IP address must be defined in
-'conf/config.json' in field 'server.healthChecks.allowFrom'</td></tr>
-<tr><td>404</td><td>RouteNotFound: Route must be valid.</td></tr>
-<tr><td>405</td><td>MethodNotAllowed: The HTTP verb must be GET.</td></tr>
-<tr><td>500</td><td>InternalError: This could be caused by one of several
-components: the API server, Kafka, Zookeeper, Redis, or one of the Producers
-for a topic.</td></tr>
-</tbody></table>
+```
++----------+------------------------------------------------------------------+
+| Response | Details                                                          |
++==========|==================================================================+
+| 200      | OK: Success                                                      |
++----------+------------------------------------------------------------------+
+| 403      | AccessDenied: Requested IP address must be defined in            |
+|          | 'conf/config.json' in field 'server.healthChecks.allowFrom'      |
++----------|------------------------------------------------------------------+
+| 404      | RouteNotFound: Route must be valid.                              |
++----------|------------------------------------------------------------------+
+| 405      | MethodNotAllowed: The HTTP verb must be GET.                     |
++----------|------------------------------------------------------------------|
+| 500      | InternalError: This could be caused by one of several            |
+|          | components: the API server, Kafka, Zookeeper, Redis, or one of   |
+|          | the Producers for a topic.                                       |
++----------+------------------------------------------------------------------+
+```
 
 ## Routes
 
@@ -27,8 +33,8 @@ Routes are organized as:
 Where:
 
 - `<extension-type>` can currently only support `crr` for replication metrics.
-- `<site-name>` represents any current sites you have defined. To display metrics
-   for all sites, use `all`.
+- `<site-name>` represents any current sites you have defined. To display
+  metrics for all sites, use `all`.
 - `<metric-type>` is an optional field. Leaving this out retrieves all available
   metrics for a given extension and site. Specifying a metric type returns the
   metric specified.
@@ -46,8 +52,8 @@ specified extension type and site name.
 
 This route returns the replication backlog as a number of objects and a number
 of total MB for the specified extension type and site name. The replication
-backlog is the set of objects queued for replication to another site, but for which
-replication is not yet complete.
+backlog is the set of objects queued for replication to another site, but for
+which replication is not yet complete.
 
 #### Example Output
 
