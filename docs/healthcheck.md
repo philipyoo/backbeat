@@ -5,19 +5,24 @@ HTTP code.
 
 ## Response Codes
 
-<table>
-<thead><tr><td><strong>Response</strong></td>
-<td><strong>Details</strong></td></tr></thead>
-<tbody>
-<tr><td>200</td><td>OK: success</td></tr>
-<tr><td>403</td><td>AccessDenied: Requested IP address must be defined in
-'conf/config.json' in field 'server.healthChecks.allowFrom'.</td></tr>
-<tr><td>404</td><td>RouteNotFound: Route must be valid.</td></tr>
-<tr><td>405</td><td>MethodNotAllowed: The HTTP verb must be a GET.</td></tr>
-<tr><td>500</td><td>InternalError: This could be caused by one of several
-components: the API server, Kafka, Zookeeper, or one of the Producers for
-a topic.</td></tr>
-</tbody></table>
+```
++----------+------------------------------------------------------------------+
+| Response | Details                                                          |
++----------|------------------------------------------------------------------+
+| 200      | OK: success                                                      |
+|----------|------------------------------------------------------------------|
+| 403      | AccessDenied: Requested IP address must be defined in            |
+|          | 'conf/config.json' in field 'server.healthChecks.allowFrom'.     |
+|----------|------------------------------------------------------------------|
+| 404      | RouteNotFound: Route must be valid.                              |
+|----------|------------------------------------------------------------------|
+| 405      | MethodNotAllowed: The HTTP verb must be a GET.                   |
+|----------|------------------------------------------------------------------|
+| 500      | InternalError: This could be caused by one of several            |
+|          | components: the API server, Kafka, Zookeeper, or one of the      |
+|          | Producers for a topic.                                           |
++----------+------------------------------------------------------------------+
+```
 
 ## Routes
 
