@@ -1,24 +1,38 @@
 # Object Lifecycle Management
 
-## OVERVIEW
+## Overview
 
 The purpose is to apply various lifecycle actions to objects after a
 certain time has passed since object creation, per lifecycle rules as
 specified in AWS S3 APIs.
 
-### EXPIRATION
+### Expiration
 
 We support expiration of versioned or non-versioned objects, when a
-number of days have passed since their creation.
+number of days have passed since their creation, or after a specific
+date (for current versions). We can additionally filter target objects
+by prefix or by tags.
 
 One important use case is to allow automatic deletion of older
 versions of versioned objects to reclaim storage space.
 
-## DESIGN
+### Transition Policies
+
+Transition policies allow to transition object data from one location
+to another one automatically, usually to a slower but cheaper location
+for old or infrequently-accessed data.
+
+On versioned buckets, it can apply to current version data, as well as
+noncurrent versions, depending on the rule.
+
+AWS-specific transitions, e.g. to STANDARD_IA or GLACIER storage
+classes is not supported through zenko, if needed, it has to be set
+directly on AWS.
+
+## Design
 
 The implementation of lifecycle in S3 connector comprises several
-components which, by working together provide lifecycle
-functionalities.
+components which, together, provide lifecycle functionalities.
 
 Most components rely on Kafka and Zookeeper to pass state to each
 other.
@@ -54,23 +68,23 @@ from bucket *foobucket*:
     |    |                              /-------------------\___________/
     |    |                 _____________v___
     |    |                /                 \
-    |    |                |   Conductor     | foobucket@null ___________
+    |    |                |   Conductor     | process:foobucket_________
     |    |                \_________________/-------------->/           \
     |    |                                                  |           |
     |    | GET /foobucket?lifecycle                         |   KAFKA   |
     |    | list foobucket (max n) => obj@v1                 |           |
-    |    |                 _________________                |           |
+    |    |                 _________________   process:     |           |
     |    |                /                 \<--------------\___________/
     |    \----------------|   Producer      |foobucket@marker  ^    ^  |
     |                     |                 |                  |    |  |
     |                     \_________________/------------------/    |  |
-    |                                  |    expire foobucket/obj@v1 |  |
+    |                                  |    expire:foobucket/obj@v1 |  |
     |                                  |                            |  |
     |                                  \----------------------------/  |
-    | DELETE foobucket/obj@v1               foobucket@(marker+n)       |
+    | DELETE foobucket/obj@v1            process:foobucket@(marker+n)  |
     |                      _________________                           |
     \---------------------/                 \<-------------------------/
-                          |   Consumer      |  expire foobucket/obj@v1
+                          |   Consumer      |  expire:foobucket/obj@v1
                           \_________________/
 
 ```
@@ -87,15 +101,20 @@ from bucket *foobucket*:
 #### Kafka topics for lifecycle
 
 * backbeat-lifecycle-bucket-tasks
-* backbeat-lifecycle-object-tasks
+* backbeat-lifecycle-object-tasks (expiration only)
+
+#### Kafka topics shared between CRR and lifecycle transitions
+
+* backbeat-replication
+* backbeat-replication-status
 
 #### Zookeeper paths
 
-* /[chroot_path]/lifecycle/data/buckets/${ownerId}:${bucket}
+* /[chroot_path]/lifecycle/data/buckets/${ownerId}:${bucketUID}:${bucketName}
 * /[chroot_path]/lifecycle/run/backlog-metrics/${topic}/${partition}/topic
 * /[chroot_path]/lifecycle/run/backlog-metrics/${topic}/${partition}/consumers/${groupId}
 
-### S3 Connector
+### CloudServer
 
 The S3 API provides three calls to manage lifecycle properties per bucket:
 
@@ -107,6 +126,23 @@ See AWS specs for details on the protocol format.
 
 Those calls essentially manage bucket attributes related to lifecycle
 behavior, which are stored as part of bucket metadata.
+
+#### Transition Policies support in CloudServer
+
+Transition policies rely on the *preferred read location* for an
+object.
+
+We introduce an optional per-object *preferred read location*. If set,
+it is used to determine which location to read the object from on a
+GET request. It overrides the *preferred read location* defined in the
+bucket replication configuration (if any).
+
+The attribute may be present in the `replicationInfo` section of
+object metadata, as a `"preferred": "<location>"` property, where
+`<location>` is one of the replication targets listed in
+`replicationInfo` that should be in `COMPLETED` state in order to make
+the object readable without specifying a location header in the GET
+request.
 
 ### Queue Populator
 
@@ -120,32 +156,80 @@ buckets are processed.
 The list of buckets is stored in zookeeper nodes with the path:
 
 ```
-[/chroot_path]/lifecycle/data/buckets/${ownerId}:${bucket}
+[/chroot_path]/lifecycle/data/buckets/${ownerId}:${bucketUID}:${bucketName}
 ```
 
 * **ownerId** is the canonical ID of the bucket owner
-* **bucket** is the bucket name
 
-The node value is not used (for now at least), so it's set to `null`
-(the JSON `null` value stored as a binary string).
+* **bucketUID** is the globally unique ID assigned to a bucket at
+    creation time (avoids conflicts with buckets re-created with the
+    same name)
+
+* **bucketName** is the bucket name
+
+The node value is not meaningful, so it's set to `null` (the JSON
+`null` value stored as a binary string).
 
 More details on actions taken when specific entries are processed from
 the metadata log:
 
 * when processing a log entry that is an update of bucket attributes,
   look at whether any lifecycle action is enabled for that bucket:
-  * if any action is enabled, create the zookeeper node for this
-    owner/bucket (ignore if already exists)
-  * if no action is enabled, delete the zookeeper node for this
-    owner/bucket (ignore if not found)
+
+  * if any action is enabled, create the zookeeper node(ignore if
+    already exists)
+
+  * if no action is enabled, delete the zookeeper node (ignore if not
+    found)
+
 * when processing a log entry that is a deletion of a bucket, delete
-  the zookeeper node for that owner/bucket (ignore if not found).
+  the zookeeper node (ignore if not found).
 
 The resulting zookeeper list should contain a current view of all
 buckets that have lifecycle enabled, up to the point where the
 metadata log has been processed.
 
-### Conductor
+Note that in the future, we may request the MongoDB database to get
+the list of buckets with lifecycle configuration instead of using
+zookeeper nodes.
+
+### Replication Queue Processor
+
+The RQP will process replication entries the same way than done for
+regular CRR, although they may come from transition policies
+processing (generated by the Lifecycle Producer).
+
+### Replication Status Processor
+
+The existing Replication Status Processor is responsible for updating
+object metadata after a CRR target has completed or failed.
+
+#### Transition Policies support in Replication Status Processor
+
+For transition policies, the RSP when processing a CRR location with a
+**COMPLETED** status, checks whether this location contains the
+`"transition": true` attribute. If so, it does the following extra
+actions:
+
+* set the new *preferred read location* in the object metadata, by
+  adding or altering the `"preferred": "<location>"` property to the
+  `replicationInfo`, where `<location>` is the name of the CRR
+  location that just completed,
+
+* send a message to the **backbeat-gc** queue containing the data
+  location attached to the previous *preferred read location* of the
+  object, so that it gets garbage-collected. The previous preferred
+  read location may be:
+
+  - the previous object-defined preferred read location if already set
+
+  - otherwise the preferred read location set in the bucket
+    replication configuration if any
+
+  - otherwise the primary location of the object if no preferred read
+    location exists.
+
+### Lifecycle Conductor
 
 The conductor role is to periodically do the following (cron-style task):
 
@@ -175,7 +259,7 @@ only the specific range belonging to this prefix. For this we can add
 the necessary info in the message JSON data to limit the listing to
 this range.
 
-### Producer
+### Lifecycle Producer
 
 The producer's responsibility is to list objects in lifecycled
 buckets, and publish to kafka queues the actual lifecycle actions to
@@ -185,38 +269,38 @@ More specifically, the producer is part of a kafka consumer group that
 processes items from the *backbeat-lifecycle-bucket-tasks* topic. For
 each of them, it does the following:
 
-* Generate or use cached credentials to be able to query the target
-  bucket (through admin-backbeat.json?)
 * Get the lifecycle configuration from S3 connector of the target
   bucket (GET /foobucket?lifecycle)
   * If no lifecycle configuration is associated to the bucket, skip
     the rest of bucket processing
+
 * List the object versions in the bucket, starting from the
   *keyMarker*/*versionIdMarker* specified in the kafka entry, or from
   the beginning if not set. The limit of entries is 1000 (list
   objects hard limit), but a lower limit may be set if needed.
+
   * If the listing is not complete, publish a new entry to the
     *backbeat-lifecycle-bucket-tasks* topic, similar to the one
     currently processed but with the *keyMarker* and
     *versionIdMarker* fields set from what's returned by the current
     finished listing. Then another producer will keep going with the
     listing and processing of this bucket.
+
   * For each object listed, match it against the lifecycle rules
-    logic. For each lifecycle rule matching (e.g. expiry), publish to
-    the *backbeat-lifecycle-object-tasks* kafka topic an entry that
-    contains the required info for the consumer to execute the
-    lifecycle action (see [object tasks](#object-tasks) message format).
+    logic. For each lifecycle rule matching, publish to the relevant
+    topic(s) the action(s) to take:
 
-Note: following Amazon's behavior:
+    - for expiration rules, publish to the
+      *backbeat-lifecycle-object-tasks* kafka topic an entry that tells
+      the lifecycle consumer to delete the object or the noncurrent
+      version (see [object tasks](#object-tasks) message format).
 
-> If lifecycle configuration is enabled on the source bucket, Amazon
-> S3 puts any lifecycle actions on hold until it marks the objects
-> status as either COMPLETED or FAILED.
-
-It's probably wise to apply the same logic, to guarantee we're not
-processing lifecycle on an object version with a pending replication.
-
-NOTE: This is not currently implemented.
+    - for transition rules, publish to the *backbeat-replication*
+      topic an object entry updated with the transition target
+      location, as a **PENDING** entry plus the `"transition": true`
+      property, as a new extra item in the `replicationInfo` attribute
+      (note that this location does not have to be part of the bucket
+      replication configuration as it is usually the case)
 
 Periodically (every minute in the current default settings) the
 internal consumer of the bucket tasks topic publishes its current
@@ -224,7 +308,25 @@ committed offset and the latest topic offset in zookeeper under
 `/[chroot_path]/lifecycle/run/backlog-metrics/...`, for checking in
 the conductor.
 
-### Consumer
+#### Note 1
+
+Following Amazon's behavior:
+
+> If lifecycle configuration is enabled on the source bucket, Amazon
+> S3 puts any lifecycle actions on hold until it marks the objects
+> status as either COMPLETED or FAILED.
+
+It's probably wise to apply the same logic, to guarantee we're not
+processing lifecycle on an object version with a pending
+replication. This is not currently implemented.
+
+#### Note 2
+
+We may do search requests on MongoDB to query the exact list of
+objects where a lifecycle rule applies, instead of filtering based on
+the full listing result, for a better efficiency.
+
+### Lifecycle Consumer
 
 The consumer's responsibility is to execute the individual lifecycle
 actions per object that has been matched against lifecycle rules.
@@ -233,8 +335,6 @@ It's part of a kafka consumer group that processes items from the
 *backbeat-lifecycle-object-tasks* topic. For each of them, it does the
 following:
 
-* Generate or use cached credentials to be able to execute actions on
-  the target object (through admin-backbeat.json?)
 * Check the "action" field, and execute the corresponding action:
   * for "deleteObject" action:
     * do a HEAD object with a "If-Unmodified-Since" condition on the
@@ -248,8 +348,8 @@ following:
 Periodically (every minute in the current default settings) the
 internal consumer of the object tasks topic publishes its current
 committed offset and the latest topic offset in zookeeper under
-`/[chroot_path]/lifecycle/run/backlog-metrics/...`, for checking in
-the conductor.
+`/[chroot_path]/lifecycle/run/backlog-metrics/...`, to let the
+conductor know the size of the backlog.
 
 ### Message formats
 
@@ -303,7 +403,7 @@ topic is the following:
 * **action**: type of lifecycle action, e.g. "deleteObject"
 * **details**: additional info related to the action
 
-## LINKS
+## Links
 
 * AWS Lifecycle Reference:
   https://docs.aws.amazon.com/AmazonS3/latest/dev/object-lifecycle-mgmt.html
