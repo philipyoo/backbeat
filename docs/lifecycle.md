@@ -73,19 +73,20 @@ from bucket *foobucket*:
     |    |                                                  |           |
     |    | GET /foobucket?lifecycle                         |   KAFKA   |
     |    | list foobucket (max n) => obj@v1                 |           |
-    |    |                 _________________   process:     |           |
-    |    |                /                 \<--------------\___________/
-    |    \----------------|   Producer      |foobucket@marker  ^    ^  |
-    |                     |                 |                  |    |  |
-    |                     \_________________/------------------/    |  |
+    |    |                __________________   process:     |           |
+    |    |               /                  \<--------------\___________/
+    |    \---------------|   Lifecycle      |foobucket@marker  ^    ^  |
+    |                    | Bucket Processor |                  |    |  |
+    |                    \_____________ ____/------------------/    |  |
     |                                  |    expire:foobucket/obj@v1 |  |
     |                                  |                            |  |
     |                                  \----------------------------/  |
     | DELETE foobucket/obj@v1            process:foobucket@(marker+n)  |
-    |                      _________________                           |
-    \---------------------/                 \<-------------------------/
-                          |   Consumer      |  expire:foobucket/obj@v1
-                          \_________________/
+    |                     __________________                           |
+    \--------------------/                  \<-------------------------/
+                         |    Lifecycle     |  expire:foobucket/obj@v1
+                         | Object Processor |
+                         \__________________/
 
 ```
 
@@ -259,13 +260,13 @@ only the specific range belonging to this prefix. For this we can add
 the necessary info in the message JSON data to limit the listing to
 this range.
 
-### Lifecycle Producer
+### Lifecycle Bucket Processor (LBP)
 
-The producer's responsibility is to list objects in lifecycled
-buckets, and publish to kafka queues the actual lifecycle actions to
-execute on objects. For now, supported actions are expiration actions.
+LBP's responsibility is to list objects in lifecycled buckets, and
+publish to kafka queues the actual lifecycle actions to execute on
+objects. For now, supported actions are expiration actions.
 
-More specifically, the producer is part of a kafka consumer group that
+More specifically, the LBP is part of a kafka consumer group that
 processes items from the *backbeat-lifecycle-bucket-tasks* topic. For
 each of them, it does the following:
 
@@ -283,8 +284,8 @@ each of them, it does the following:
     *backbeat-lifecycle-bucket-tasks* topic, similar to the one
     currently processed but with the *keyMarker* and
     *versionIdMarker* fields set from what's returned by the current
-    finished listing. Then another producer will keep going with the
-    listing and processing of this bucket.
+    finished listing. Then another LBP instance will keep going with
+    the listing and processing of this bucket.
 
   * For each object listed, match it against the lifecycle rules
     logic. For each lifecycle rule matching, publish to the relevant
@@ -292,8 +293,8 @@ each of them, it does the following:
 
     - for expiration rules, publish to the
       *backbeat-lifecycle-object-tasks* kafka topic an entry that tells
-      the lifecycle consumer to delete the object or the noncurrent
-      version (see [object tasks](#object-tasks) message format).
+      the LOP to delete the object or the noncurrent version (see
+      [object tasks](#object-tasks) message format).
 
     - for transition rules, publish to the *backbeat-replication*
       topic an object entry updated with the transition target
@@ -326,10 +327,10 @@ We may do search requests on MongoDB to query the exact list of
 objects where a lifecycle rule applies, instead of filtering based on
 the full listing result, for a better efficiency.
 
-### Lifecycle Consumer
+### Lifecycle Object Processor (LOP)
 
-The consumer's responsibility is to execute the individual lifecycle
-actions per object that has been matched against lifecycle rules.
+LOP's responsibility is to execute the individual lifecycle actions
+per object that has been matched against lifecycle rules.
 
 It's part of a kafka consumer group that processes items from the
 *backbeat-lifecycle-object-tasks* topic. For each of them, it does the
@@ -346,9 +347,9 @@ following:
   * We may consider adding more types of operations in the future
 
 Periodically (every minute in the current default settings) the
-internal consumer of the object tasks topic publishes its current
-committed offset and the latest topic offset in zookeeper under
-`/[chroot_path]/lifecycle/run/backlog-metrics/...`, to let the
+internal kafka consumer of the object tasks topic publishes its
+current committed offset and the latest topic offset in zookeeper
+under `/[chroot_path]/lifecycle/run/backlog-metrics/...`, to let the
 conductor know the size of the backlog.
 
 ### Message formats
