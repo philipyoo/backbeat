@@ -93,7 +93,10 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "location1": "disabled",
+        "location2": "disabled"
+    }
     ```
 
 * POST `/_/backbeat/api/<service>/pause/<location-name>`
@@ -110,7 +113,9 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "<location-name>": "disabled"
+    }
     ```
 
 * GET `/_/backbeat/api/<service>/resume/<location-name>`
@@ -147,7 +152,10 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "location1": "enabled",
+        "location2": "enabled"
+    }
     ```
 
 * POST `/_/backbeat/api/<service>/resume/<location-name>`
@@ -164,7 +172,9 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "<location-name>": "enabled"
+    }
     ```
 
 * POST `/_/backbeat/api/<service>/resume/<location-name>/schedule`
@@ -191,7 +201,9 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "<location-name>": "2018-06-28T05:40:20.600Z"
+    }
     ```
 
 * DELETE `/_/backbeat/api/<service>/resume/<location-name>/schedule`
@@ -206,5 +218,7 @@ consumer is resumed, it again resumes consuming entries from its last offset.
 
     Response:
     ```json
-    {}
+    {
+        "<location-name>": "none"
+    }
     ```
