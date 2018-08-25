@@ -272,6 +272,7 @@ describe('CRR Pause/Resume status updates', function d() {
 
     after(() => {
         zkHelper.close();
+        // TODO: Close QueueProcessors
     });
 
     it('should pause an active location', done => {
