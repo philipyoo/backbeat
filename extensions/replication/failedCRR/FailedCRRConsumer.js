@@ -115,9 +115,10 @@ class FailedCRRConsumer {
         const [service, extension, status, bucketName, objectKey, versionId,
             site] = data.key.split(':');
         // CRR object-level metrics key schema.
-        const queryString = `${site}:${bucketName}:${objectKey}:${versionId}:` +
+        let queryString = `${site}:${bucketName}:${objectKey}:${versionId}:` +
             `${service}:${extension}:*`;
         return redisClient.scan(queryString, undefined, (err, keys) => {
+            console.log('_removePreexistingKeys1', { keys });
             if (err) {
                 return cb(err);
             }
@@ -125,6 +126,7 @@ class FailedCRRConsumer {
                 return cb();
             }
             return redisClient.batch([['del', ...keys]], (err, res) => {
+                console.log('_removePreexistingKeys2', { err, res });
                 if (err) {
                     return cb(err);
                 }
