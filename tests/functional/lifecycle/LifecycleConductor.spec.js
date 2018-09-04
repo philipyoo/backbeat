@@ -162,6 +162,7 @@ describe('lifecycle conductor', function lifecycleConductor() {
         },
     ], err => {
         assert.ifError(err);
+        assert(false);
         done();
     }));
 });
