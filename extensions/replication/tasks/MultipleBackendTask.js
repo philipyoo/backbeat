@@ -3,7 +3,9 @@ const uuid = require('uuid/v4');
 
 const errors = require('arsenal').errors;
 const jsutil = require('arsenal').jsutil;
+const ObjectMD = require('arsenal').models.ObjectMD;
 const ObjectMDLocation = require('arsenal').models.ObjectMDLocation;
+const BackbeatMetadataProxy = require('../utils/BackbeatMetadataProxy');
 const ObjectQueueEntry = require('../../../lib/models/ObjectQueueEntry');
 
 const ReplicateObject = require('./ReplicateObject');
@@ -188,8 +190,89 @@ class MultipleBackendTask extends ReplicateObject {
                 LocationConstraint: sourceEntry.getDataStoreName(),
             });
         }
+        if (sourceEntry.getReplicationIsNFS()) {
+            return this._checkObjectState(sourceEntry, destEntry, log, err => {
+                if (err) {
+                    if (err && !err.InvalidObjectState) {
+                        return doneOnce(err);
+                    }
+                    // Skip the error since we first want to abort
+                    return this._multipleBackendAbortMPU(sourceEntry, destEntry,
+                        uploadId, log, err => {
+                            if (err) {
+                                return doneOnce(err);
+                            }
+                            // Do not set status to FAILED if it's aborted. We
+                            // want to skip silently.
+                            return done(errors.InvalidObjectState);
+                        });
+                }
+                return this._putMPUPart(sourceEntry, destEntry, sourceReq, size,
+                    uploadId, partNumber, log, doneOnce);
+            });
+        }
         return this._putMPUPart(sourceEntry, destEntry, sourceReq, size,
             uploadId, partNumber, log, doneOnce);
+    }
+
+    /**
+     * Wrapper for aborting an MPU which uses exponential backoff retry.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {String} uploadId - The MPU upload ID to abort
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} cb - The callback to call
+     * @return {undefined}
+     */
+    _multipleBackendAbortMPU(sourceEntry, destEntry, uploadId, log, cb) {
+        this.retry({
+            actionDesc: 'abort multipart upload',
+            logFields: { entry: sourceEntry.getLogInfo() },
+            actionFunc: done => this._multipleBackendAbortMPUOnce(sourceEntry,
+                destEntry, uploadId, log, done),
+            shouldRetryFunc: err => err.retryable,
+            log,
+        }, cb);
+    }
+
+    /**
+     * Attempt to abort the given MPU on the source.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {String} uploadId - The MPU upload ID to abort
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} cb - The callback to call
+     * @return {undefined}
+     */
+    _multipleBackendAbortMPUOnce(sourceEntry, destEntry, uploadId, log, cb) {
+        log.debug('aborting multipart upload', {
+            entry: sourceEntry.getLogInfo(),
+            uploadId,
+        });
+        const doneOnce = jsutil.once(cb);
+        const destReq = this.backbeatSource.multipleBackendAbortMPU({
+            Bucket: destEntry.getBucket(),
+            Key: destEntry.getObjectKey(),
+            StorageType: destEntry.getReplicationStorageType(),
+            StorageClass: this.site,
+            UploadId: uploadId,
+        });
+        attachReqUids(destReq, log);
+        return destReq.send(err => {
+            if (err) {
+                // eslint-disable-next-line no-param-reassign
+                err.origin = 'source';
+                log.error('an error occurred aboring multipart upload', {
+                    method: 'MultipleBackendTask._multipleBackendAbortMPUOnce',
+                    entry: destEntry.getLogInfo(),
+                    origin: 'source',
+                    peer: this.destBackbeatHost,
+                    error: err.message,
+                });
+                return doneOnce(err);
+            }
+            return doneOnce();
+        });
     }
 
    /**
@@ -499,6 +582,27 @@ class MultipleBackendTask extends ReplicateObject {
     _getAndPutMultipartUploadOnce(sourceEntry, destEntry, log, cb) {
         const doneOnce = jsutil.once(cb);
         log.debug('replicating MPU data', { entry: sourceEntry.getLogInfo() });
+        if (sourceEntry.getReplicationIsNFS()) {
+            return this._checkObjectState(sourceEntry, destEntry, log, err => {
+                if (err) {
+                    return doneOnce(err);
+                }
+                return this._sendInitiateMPU(sourceEntry, destEntry, log,
+                    doneOnce);
+            });
+        }
+        return this._sendInitiateMPU(sourceEntry, destEntry, log, doneOnce);
+    }
+
+    /**
+     * Send the initiate MPU request and then complete the MPU.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} doneOnce - The callback to call
+     * @return {undefined}
+     */
+    _sendInitiateMPU(sourceEntry, destEntry, log, doneOnce) {
         return this._initiateMPU(sourceEntry, destEntry, log,
         (err, uploadId) => {
             if (err) {
@@ -578,6 +682,87 @@ class MultipleBackendTask extends ReplicateObject {
             });
             log.debug('putting data', { entry: destEntry.getLogInfo() });
         }
+        if (sourceEntry.getReplicationIsNFS()) {
+            return this._checkObjectState(sourceEntry, destEntry, log, err => {
+                if (err) {
+                    return doneOnce(err);
+                }
+                return this._sendMultipleBackendPutObject(sourceEntry,
+                    destEntry, part, partObj, size, incomingMsg, log, doneOnce);
+            });
+        }
+        return this._sendMultipleBackendPutObject(sourceEntry, destEntry, part,
+            partObj, size, incomingMsg, log, doneOnce);
+    }
+
+    /**
+     * Get the source object metadata and ensure the latest object MD5 hash is
+     * the same as the entry.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} cb - The callback to call
+     * @return {undefined}
+     */
+    _checkObjectState(sourceEntry, destEntry, log, cb) {
+        return this._getSourceMD(sourceEntry, destEntry, log, (err, res) => {
+            if (err) {
+                return cb(err);
+            }
+            let metadata;
+            try {
+                metadata = JSON.parse(res.Body);
+            } catch (e) {
+                log.error('malformed metadata from source', {
+                    error: e.message
+                });
+                return cb(errors.InternalError);
+            }
+            const objMD = new ObjectMD(metadata);
+            if (objMD.getContentMd5() !== destEntry.getContentMd5()) {
+                // The latest object has different content so an attempt at CRR
+                // will fail in CloudServer. We can safely skip this entry
+                // because it is not the latest object.
+                return cb(errors.InvalidObjectState);
+            }
+            return cb();
+        });
+    }
+
+    /**
+     * Get the source object's metadata.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} cb - The callback to call
+     * @return {undefined}
+     */
+    _getSourceMD(sourceEntry, destEntry, log, cb) {
+        const metadataProxy = new BackbeatMetadataProxy(this.sourceConfig);
+        const sourceRole = sourceEntry.getReplicationRoles().split(',')[0];
+        metadataProxy.setSourceRole(sourceRole);
+        metadataProxy.setSourceClient(log);
+        metadataProxy.getMetadata({
+            bucket: destEntry.getBucket(),
+            objectKey: destEntry.getObjectKey(),
+            encodedVersionId: destEntry.getEncodedVersionId(),
+        }, log, cb);
+    }
+
+    /**
+     * Send the put object request to Cloudserver.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Object} part - single data location info
+     * @param {ObjectMDLocation} partObj - The instance to get a part location
+     * @param {Number} size - The size of object to stream
+     * @param {Readable} incomingMsg - The stream of data to put
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} doneOnce - The callback to call
+     * @return {undefined}
+     */
+    _sendMultipleBackendPutObject(sourceEntry, destEntry, part, partObj, size,
+        incomingMsg, log, doneOnce) {
         const destReq = this.backbeatSource.multipleBackendPutObject({
             Bucket: destEntry.getBucket(),
             Key: destEntry.getObjectKey(),
@@ -756,6 +941,29 @@ class MultipleBackendTask extends ReplicateObject {
         log.debug('replicating delete marker', {
             entry: sourceEntry.getLogInfo(),
         });
+        if (sourceEntry.getReplicationIsNFS()) {
+            return this._checkObjectState(sourceEntry, destEntry, log, err => {
+                if (err && err.code !== 'ObjNotFound') {
+                    // If it is a non-versioned object, the object will not be
+                    // found. However we still want to replicate a delete
+                    // marker.
+                    return doneOnce(err);
+                }
+                return this._sendMultipleBackendDeleteObject(destEntry, log,
+                    doneOnce);
+            });
+        }
+        return this._sendMultipleBackendDeleteObject(destEntry, log, doneOnce);
+    }
+
+    /**
+     * Send a delete object request to the source.
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} doneOnce - The callback to call
+     * @return {undefined}
+     */
+    _sendMultipleBackendDeleteObject(destEntry, log, doneOnce) {
         const destReq = this.backbeatSource.multipleBackendDeleteObject({
             Bucket: destEntry.getBucket(),
             Key: destEntry.getObjectKey(),
@@ -789,7 +997,16 @@ class MultipleBackendTask extends ReplicateObject {
         return async.waterfall([
             next => this._setupRoles(sourceEntry, log, next),
             (sourceRole, next) =>
-                this._refreshSourceEntry(sourceEntry, log, next),
+                this._refreshSourceEntry(sourceEntry, log, (err, res) => {
+                    if (err && err.code === 'ObjNotFound' &&
+                        sourceEntry.getReplicationIsNFS() &&
+                        !sourceEntry.getIsDeleteMarker()) {
+                        // The object was deleted before entry is processed, we
+                        // can safely skip this entry.
+                        return next(errors.InvalidObjectState);
+                    }
+                    return next(null, res);
+                }),
             (refreshedEntry, next) => {
                 if (sourceEntry.getIsDeleteMarker()) {
                     return this._putDeleteMarker(sourceEntry, destEntry, log,
