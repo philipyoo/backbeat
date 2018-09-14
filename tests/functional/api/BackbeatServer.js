@@ -35,11 +35,11 @@ function getUrl(options, path) {
     return `http://${options.host}:${options.port}${path}`;
 }
 
-function setKey(redisClient, keys, cb) {
-    const cmds = keys.map(key => {
-        const value = 'arn:aws:iam::604563867484:test-role';
-        return ['set', `${TEST_REDIS_KEY_FAILED_CRR}:${key}`, value];
-    });
+function addMembers(redisClient, site, members, cb) {
+    let score = 1536904800000;
+    const key = `${TEST_REDIS_KEY_FAILED_CRR}:${site}:${score}`;
+    const cmds = members.map(member => (['zadd', key, ++score, member]));
+    console.log({ cmd: cmds[0] });
     redisClient.batch(cmds, cb);
 }
 
@@ -267,7 +267,15 @@ describe('Backbeat Server', () => {
             statsClient.reportNewRequest(`${site2}:${BYTES_DONE}`, 1874);
             statsClient.reportNewRequest(`${site2}:${BYTES_FAIL}`, 575);
 
+            const testVersionId =
+                '3938353030303836313334343731393939393939524730303120203';
+            const members = [
+                `test-bucket:test-key:${testVersionId}0:${site1}`,
+                `test-bucket:test-key:${testVersionId}1:${site2}`,
+            ];
+
             return async.parallel([
+                next => addMembers(redisClient, site1, members, next),
                 next => redisClient.incrby(`${site1}:${OPS_PENDING}`, 2, next),
                 next => redisClient.incrby(`${site1}:${BYTES_PENDING}`, 1024,
                     next),
@@ -779,9 +787,18 @@ describe('Backbeat Server', () => {
     });
 
     describe('CRR Retry routes', () => {
+        const destconfig = config.extensions.replication.destination;
+        const site1 = destconfig.bootstrapList[0].site;
+        const site2 = destconfig.bootstrapList[1].site;
         let redisClient;
 
         before(() => {
+            const s3Mock = new S3Mock();
+            const vaultMock = new VaultMock();
+            http.createServer((req, res) => s3Mock.onRequest(req, res))
+                .listen(config.extensions.replication.source.s3.port);
+            http.createServer((req, res) => vaultMock.onRequest(req, res))
+                .listen(config.extensions.replication.source.auth.vault.port);
             redisClient = new RedisClient(redisConfig, fakeLogger);
         });
 
@@ -803,6 +820,7 @@ describe('Backbeat Server', () => {
         const retryQueryPaths = [
             '/_/crr/failed?marker=foo',
             '/_/crr/failed?marker=',
+            '/_/crr/failed?sitename=',
         ];
         retryQueryPaths.forEach(path => {
             it(`should get a 400 response for route: ${path}`, done => {
@@ -815,9 +833,10 @@ describe('Backbeat Server', () => {
             });
         });
 
+        // TODO: Update this test.
         it('should get a 200 response for route: /_/crr/failed', done => {
-            const keys = ['test-bucket:test-key:test-versionId:test-site'];
-            setKey(redisClient, keys, err => {
+            const member = ['test-bucket:test-key:test-versionId'];
+            addMembers(redisClient, site1, member, err => {
                 assert.ifError(err);
                 const body = JSON.stringify([{
                     Bucket: 'test-bucket',
@@ -895,13 +914,29 @@ describe('Backbeat Server', () => {
                 });
             });
 
+            it('should return empty array for route: /_/crr/failed when ' +
+            'no sitename is given', done => {
+                const member = `test-bucket-1:test-key:${testVersionId}`;
+                addMembers(redisClient, 'test-site', [member], err => {
+                    assert.ifError(err);
+                    getRequest('/_/crr/failed', (err, res) => {
+                        assert.ifError(err);
+                        assert.deepStrictEqual(res, {
+                            IsTruncated: false,
+                            Versions: [],
+                        });
+                        done();
+                    });
+                });
+            });
+
             it('should get correct data for GET route: /_/crr/failed when ' +
             'the key has been created and there is one key', done => {
-                const key = `test-bucket-1:test-key:${testVersionId}:` +
-                    `test-site:${testTimestamp}`;
-                setKey(redisClient, [key], err => {
+                const member = `test-bucket-1:test-key:${testVersionId}`;
+                addMembers(redisClient, 'test-site', [member], err => {
                     assert.ifError(err);
-                    getRequest('/_/crr/failed?marker=0', (err, res) => {
+                    getRequest('/_/crr/failed?marker=0&sitename=test-site',
+                    (err, res) => {
                         assert.ifError(err);
                         assert.deepStrictEqual(res, {
                             IsTruncated: false,
@@ -920,32 +955,31 @@ describe('Backbeat Server', () => {
             });
 
             it('should get correct data for GET route: /_/crr/failed when ' +
-            'the key has been created and there are multiple keys',
+            'the key has been created and there are multiple members',
             done => {
-                const keys = [
-                    'test-bucket:test-key:test-versionId:test-site:' +
-                        `${testTimestamp}`,
-                    'test-bucket-1:test-key-1:test-versionId-1:test-site-1:' +
-                        `${testTimestamp}`,
-                    'test-bucket-2:test-key-2:test-versionId-2:test-site-2:' +
-                        `${testTimestamp}`,
+                const members = [
+                    'test-bucket:test-key:test-versionId',
+                    'test-bucket-1:test-key-1:test-versionId-1',
+                    'test-bucket-2:test-key-2:test-versionId-2',
                 ];
-                setKey(redisClient, keys, err => {
+                addMembers(redisClient, 'test-site', members, err => {
                     assert.ifError(err);
-                    getRequest('/_/crr/failed', (err, res) => {
+                    getRequest('/_/crr/failed?marker=0&sitename=test-site',
+                    (err, res) => {
                         assert.ifError(err);
                         assert.strictEqual(res.IsTruncated, false);
                         assert.strictEqual(res.Versions.length, 3);
                         // We cannot guarantee order because it depends on how
                         // Redis fetches the keys.
-                        keys.forEach(k => {
+                        members.forEach(member => {
                             // eslint-disable-next-line no-unused-vars
-                            const [bucket, key, versionId, site] = k.split(':');
+                            const [bucket, key, versionId] =
+                                member.split(':');
                             assert(res.Versions.some(o => (
                                 o.Bucket === bucket &&
                                 o.Key === key &&
                                 o.VersionId === testVersionId &&
-                                o.StorageClass === site
+                                o.StorageClass === 'test-site'
                             )));
                         });
                         done();
@@ -953,6 +987,58 @@ describe('Backbeat Server', () => {
                 });
             });
 
+            it('should get correct data for GET route: /_/crr/failed when ' +
+            'the two site keys have been created',
+            done => {
+                const members = [
+                    'test-bucket:test-key:test-versionId',
+                    'test-bucket-1:test-key-1:test-versionId-1',
+                    'test-bucket-2:test-key-2:test-versionId-2',
+                ];
+                async.series([
+                    next => addMembers(redisClient, 'test-site', members, next),
+                    next => addMembers(redisClient, 'test-site-1', members,
+                        next),
+                    next => getRequest('/_/crr/failed?sitename=test-site',
+                        (err, res) => {
+                            assert.ifError(err);
+                            assert.strictEqual(res.IsTruncated, false);
+                            assert.strictEqual(res.Versions.length, 3);
+                            members.forEach(member => {
+                                // eslint-disable-next-line no-unused-vars
+                                const [bucket, key, versionId] =
+                                    member.split(':');
+                                assert(res.Versions.some(o => (
+                                    o.Bucket === bucket &&
+                                    o.Key === key &&
+                                    o.VersionId === testVersionId &&
+                                    o.StorageClass === 'test-site'
+                                )));
+                            });
+                            next();
+                        }),
+                    next => getRequest('/_/crr/failed?sitename=test-site-1',
+                        (err, res) => {
+                            assert.ifError(err);
+                            assert.strictEqual(res.IsTruncated, false);
+                            assert.strictEqual(res.Versions.length, 3);
+                            members.forEach(member => {
+                                // eslint-disable-next-line no-unused-vars
+                                const [bucket, key, versionId] =
+                                    member.split(':');
+                                assert(res.Versions.some(o => (
+                                    o.Bucket === bucket &&
+                                    o.Key === key &&
+                                    o.VersionId === testVersionId &&
+                                    o.StorageClass === 'test-site-1'
+                                )));
+                            });
+                            next();
+                        }),
+                ], done);
+            });
+
+            // TODO: Update this test.
             it('should get correct data at scale for GET route: /_/crr/failed',
             function f(done) {
                 this.timeout(30000);
@@ -1029,39 +1115,51 @@ describe('Backbeat Server', () => {
 
             it('should get correct data for GET route: ' +
             '/_/crr/failed/<bucket>/<key>?versionId=<versionId>', done => {
-                const keys = [
-                    'test-bucket:test-key/a:test-versionId:test-site:' +
-                        `${testTimestamp}`,
-                    'test-bucket:test-key/a:test-versionId:test-site-2:' +
-                        `${testTimestamp}`,
-                    'test-bucket-1:test-key-1/a:test-versionId-1:test-site:' +
-                        `${testTimestamp}`,
-                ];
-                setKey(redisClient, keys, err => {
-                    assert.ifError(err);
-                    const route = '/_/crr/failed/test-bucket/test-key/a?' +
-                        'versionId=test-versionId';
-                    return getRequest(route, (err, res) => {
-                        assert.ifError(err);
-                        assert.strictEqual(res.IsTruncated, false);
-                        assert.strictEqual(res.Versions.length, 2);
-                        const matchingkeys = [keys[0], keys[1]];
-                        matchingkeys.forEach(k => {
-                            // eslint-disable-next-line no-unused-vars
-                            const [bucket, key, versionId, site] = k.split(':');
-                            assert(res.Versions.some(o => (
-                                o.Bucket === bucket &&
-                                o.Key === key &&
-                                o.VersionId === testVersionId &&
-                                o.StorageClass === site
-                            )));
+                const member = 'test-bucket:test-key/a:test-versionId';
+                const member1 = 'test-bucket:test-key-1/a:test-versionId';
+                async.series([
+                    next =>
+                        addMembers(redisClient, 'test-site', [member], next),
+                    next =>
+                        addMembers(redisClient, 'test-site', [member1], next),
+                    next =>
+                        addMembers(redisClient, 'test-site-1', [member], next),
+                    next => {
+                        const route = '/_/crr/failed/test-bucket/test-key/a?' +
+                            'versionId=test-versionId';
+                        return getRequest(route, (err, res) => {
+                            assert.ifError(err);
+                            assert.strictEqual(res.IsTruncated, false);
+                            assert.strictEqual(res.Versions.length, 2);
+                            const matches = [{
+                                member,
+                                site: 'test-site',
+                            }, {
+                                member,
+                                site: 'test-site-1',
+                            }];
+                            matches.forEach(match => {
+                                const { member, site } = match;
+                                // eslint-disable-next-line no-unused-vars
+                                const [bucket, key, versionId] =
+                                    member.split(':');
+                                assert(res.Versions.some(o => (
+                                    o.Bucket === bucket &&
+                                    o.Key === key &&
+                                    o.VersionId === testVersionId &&
+                                    o.StorageClass === site
+                                )));
+                            });
+                            return done();
                         });
-                        return done();
-                    });
+                    },
+                ], err => {
+                    assert.ifError(err);
+                    return done();
                 });
             });
 
-            it('should get correct data for GET route: /_/crr/failed when no ' +
+            it.only('should get correct data for GET route: /_/crr/failed when no ' +
             'key has been matched', done => {
                 const body = JSON.stringify([{
                     Bucket: 'bucket',
