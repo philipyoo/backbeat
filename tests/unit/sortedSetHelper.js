@@ -3,7 +3,7 @@ const { redisKeys } = require('../../extensions/replication/constants');
 
 const {
     getSortedSetMember,
-    getSortedSetKey
+    getSortedSetKey,
 } = require('../../lib/util/sortedSetHelper');
 
 describe('sorted set helper methods', () => {
