@@ -16,7 +16,7 @@ describe('sorted set helper methods', () => {
 
         it('should return the correct Redis sorted set member schema with no ' +
         'version', () => {
-            const member = getSortedSetMember('a', 'b', 'c');
+            const member = getSortedSetMember('a', 'b');
             assert.strictEqual(member, 'a:b:');
         });
     });

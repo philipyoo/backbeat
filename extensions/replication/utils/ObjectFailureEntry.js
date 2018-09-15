@@ -6,7 +6,7 @@ class ObjectFailureEntry {
      * @constructor
      * @param {String} member - The Redis sorted set member for the failed
      * object. The key has the following schema: <bucket>:<key>:<versionId>
-     * @param {String} site - The site in which the version is stored
+     * @param {String} sitename - The site in which the version is stored
      */
     constructor(member, sitename) {
         this.member = member;

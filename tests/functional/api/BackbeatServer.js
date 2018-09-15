@@ -38,7 +38,6 @@ function getUrl(options, path) {
 function addMembers(redisClient, site, members, cb) {
     const statsClient = new StatsModel(redisClient);
     const epoch = Date.now();
-    const date = new Date(epoch);
     const twelveHouseAgo = epoch - (60 * 60 * 1000) * 12;
     let score = statsClient.normalizeTimestampByHour(new Date(twelveHouseAgo));
     const key = `${TEST_REDIS_KEY_FAILED_CRR}:${site}:${score}`;
@@ -46,14 +45,11 @@ function addMembers(redisClient, site, members, cb) {
     redisClient.batch(cmds, cb);
 }
 
-function addManyMembers(redisClient, site, members, normalizedScore, score, cb) {
+function addManyMembers(redisClient, site, members, normalizedScore, score,
+    cb) {
+    let givenScore = score;
     const key = `${TEST_REDIS_KEY_FAILED_CRR}:${site}:${normalizedScore}`;
-    const cmds = members.map(member => (['zadd', key, ++score, member]));
-    redisClient.batch(cmds, cb);
-}
-
-function setDummyKey(redisClient, keys, cb) {
-    const cmds = keys.map(key => ['set', key, 'null']);
+    const cmds = members.map(member => (['zadd', key, ++givenScore, member]));
     redisClient.batch(cmds, cb);
 }
 
@@ -796,9 +792,6 @@ describe('Backbeat Server', () => {
     });
 
     describe('CRR Retry routes', () => {
-        const destconfig = config.extensions.replication.destination;
-        const site1 = destconfig.bootstrapList[0].site;
-        const site2 = destconfig.bootstrapList[1].site;
         let redisClient;
 
         before(() => {
@@ -904,7 +897,6 @@ describe('Backbeat Server', () => {
             // Version ID calculated from the mock object MD.
             const testVersionId =
                 '39383530303038363133343437313939393939395247303031202030';
-            const testTimestamp = '0123456789';
 
             before(done => deleteKeys(redisClient, done));
 
@@ -1054,7 +1046,6 @@ describe('Backbeat Server', () => {
                 async.eachLimit(hours, 10, (hour, callback) => {
                     const delta = (60 * 60 * 1000) * hour;
                     let epoch = Date.now() - delta;
-                    const date = new Date(epoch);
                     return async.timesLimit(150, 10, (i, next) => {
                         const members = [
                             `bucket-${i}:key-a-${i}-${hour}:versionId-${i}`,
@@ -1064,7 +1055,7 @@ describe('Backbeat Server', () => {
                             `bucket-${i}:key-e-${i}-${hour}:versionId-${i}`,
                         ];
                         const statsClient = new StatsModel(redisClient);
-                        let normalizedScore = statsClient
+                        const normalizedScore = statsClient
                             .normalizeTimestampByHour(new Date(epoch));
                         epoch += 5;
                         return addManyMembers(redisClient, 'test-site', members,
@@ -1077,25 +1068,26 @@ describe('Backbeat Server', () => {
                     let marker = 0;
                     async.timesSeries(40, (i, next) =>
                         getRequest('/_/crr/failed?' +
-                            `marker=${marker}&sitename=test-site`, (err, res) => {
-                            assert.ifError(err);
-                            res.Versions.forEach(version => {
-                                // Ensure we have no duplicate results.
-                                assert(!set.has(version.Key));
-                                set.add(version.Key);
-                            });
-                            if (res.IsTruncated === false) {
-                                assert.strictEqual(res.NextMarker,
-                                    undefined);
-                                assert.strictEqual(set.size, memberCount);
-                                return done();
-                            }
-                            assert.strictEqual(res.IsTruncated, true);
-                            assert.strictEqual(
-                                typeof(res.NextMarker), 'number');
-                            marker = res.NextMarker;
-                            return next();
-                        }), done);
+                            `marker=${marker}&sitename=test-site`,
+                            (err, res) => {
+                                assert.ifError(err);
+                                res.Versions.forEach(version => {
+                                    // Ensure we have no duplicate results.
+                                    assert(!set.has(version.Key));
+                                    set.add(version.Key);
+                                });
+                                if (res.IsTruncated === false) {
+                                    assert.strictEqual(res.NextMarker,
+                                        undefined);
+                                    assert.strictEqual(set.size, memberCount);
+                                    return done();
+                                }
+                                assert.strictEqual(res.IsTruncated, true);
+                                assert.strictEqual(
+                                    typeof(res.NextMarker), 'number');
+                                marker = res.NextMarker;
+                                return next();
+                            }), done);
                 });
             });
 
@@ -1105,9 +1097,8 @@ describe('Backbeat Server', () => {
                 this.timeout(30000);
                 const statsClient = new StatsModel(redisClient);
                 const epoch = Date.now();
-                const date = new Date(epoch);
                 let twelveHouseAgo = epoch - (60 * 60 * 1000) * 12;
-                let normalizedScore = statsClient
+                const normalizedScore = statsClient
                     .normalizeTimestampByHour(new Date(twelveHouseAgo));
                 return async.timesLimit(2000, 10, (i, next) => {
                     const members = [
@@ -1123,30 +1114,30 @@ describe('Backbeat Server', () => {
                 }, err => {
                     assert.ifError(err);
                     const memberCount = 2000 * 5;
-                    const reqCount = memberCount;
                     const set = new Set();
                     let marker = 0;
                     async.timesSeries(10, (i, next) =>
                         getRequest('/_/crr/failed?' +
-                            `marker=${marker}&sitename=test-site`, (err, res) => {
-                            assert.ifError(err);
-                            res.Versions.forEach(version => {
-                                // Ensure we have no duplicate results.
-                                assert(!set.has(version.Key));
-                                set.add(version.Key);
-                            });
-                            if (res.IsTruncated === false) {
-                                assert.strictEqual(res.NextMarker,
-                                    undefined);
-                                assert.strictEqual(set.size, memberCount);
-                                return done();
-                            }
-                            assert.strictEqual(res.IsTruncated, true);
-                            assert.strictEqual(
-                                typeof(res.NextMarker), 'number');
-                            marker = res.NextMarker;
-                            return next();
-                        }), done);
+                            `marker=${marker}&sitename=test-site`,
+                            (err, res) => {
+                                assert.ifError(err);
+                                res.Versions.forEach(version => {
+                                    // Ensure we have no duplicate results.
+                                    assert(!set.has(version.Key));
+                                    set.add(version.Key);
+                                });
+                                if (res.IsTruncated === false) {
+                                    assert.strictEqual(res.NextMarker,
+                                        undefined);
+                                    assert.strictEqual(set.size, memberCount);
+                                    return done();
+                                }
+                                assert.strictEqual(res.IsTruncated, true);
+                                assert.strictEqual(
+                                    typeof(res.NextMarker), 'number');
+                                marker = res.NextMarker;
+                                return next();
+                            }), done);
                 });
             });
 
@@ -1203,7 +1194,7 @@ describe('Backbeat Server', () => {
                                     o.StorageClass === site
                                 )));
                             });
-                            return done();
+                            return next();
                         });
                     },
                 ], err => {
@@ -1212,8 +1203,8 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it('should get correct data for POST route: /_/crr/failed when no ' +
-            'key has been matched', done => {
+            it('should get correct data for POST route: ' +
+            '/_/crr/failed when no key has been matched', done => {
                 const body = JSON.stringify([{
                     Bucket: 'bucket',
                     Key: 'key',
