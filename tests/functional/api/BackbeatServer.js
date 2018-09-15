@@ -842,10 +842,9 @@ describe('Backbeat Server', () => {
             });
         });
 
-        // TODO: Update this test.
-        it.skip('should get a 200 response for route: /_/crr/failed', done => {
+        it('should get a 200 response for route: /_/crr/failed', done => {
             const member = ['test-bucket:test-key:test-versionId'];
-            addMembers(redisClient, site1, member, err => {
+            addMembers(redisClient, 'test-site', member, err => {
                 assert.ifError(err);
                 const body = JSON.stringify([{
                     Bucket: 'test-bucket',
@@ -1167,7 +1166,7 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it.skip('should get correct data for GET route: ' +
+            it('should get correct data for GET route: ' +
             '/_/crr/failed/<bucket>/<key>?versionId=<versionId>', done => {
                 const member = 'test-bucket:test-key/a:test-versionId';
                 const member1 = 'test-bucket:test-key-1/a:test-versionId';
@@ -1213,7 +1212,7 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it.skip('should get correct data for POST route: /_/crr/failed when no ' +
+            it('should get correct data for POST route: /_/crr/failed when no ' +
             'key has been matched', done => {
                 const body = JSON.stringify([{
                     Bucket: 'bucket',
@@ -1232,17 +1231,17 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it.skip('should get correct data for POST route: /_/crr/failed ' +
+            it('should get correct data for POST route: /_/crr/failed ' +
             'when there are multiple matching keys', done => {
-                const keys = [
-                    `test-bucket:test-key:${testVersionId}:test-site-1:` +
-                        `${testTimestamp}`,
-                    `test-bucket:test-key:${testVersionId}:test-site-2:` +
-                        `${testTimestamp}`,
-                    `test-bucket:test-key:${testVersionId}:test-site-3:` +
-                        `${testTimestamp}`,
-                ];
-                setKey(redisClient, keys, err => {
+                const member = `test-bucket:test-key:${testVersionId}`;
+                async.series([
+                    next =>
+                        addMembers(redisClient, 'test-site-1', [member], next),
+                    next =>
+                        addMembers(redisClient, 'test-site-2', [member], next),
+                    next =>
+                        addMembers(redisClient, 'test-site-3', [member], next),
+                ], err => {
                     assert.ifError(err);
                     const body = JSON.stringify([{
                         Bucket: 'test-bucket',
@@ -1302,9 +1301,9 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it.skip('should get correct data at scale for POST route: /_/crr/failed',
+            it('should get correct data at scale for POST route: /_/crr/failed',
             function f(done) {
-                this.timeout(30000);
+                this.timeout(60000);
                 const reqBody = [];
                 async.timesLimit(10, 10, (i, next) => {
                     reqBody.push({
@@ -1333,19 +1332,19 @@ describe('Backbeat Server', () => {
                         VersionId: testVersionId,
                         StorageClass: `site-${i}-e`,
                     });
-                    const keys = [
-                        `bucket-${i}:key-${i}:${testVersionId}:site-${i}-a:` +
-                            `${testTimestamp}`,
-                        `bucket-${i}:key-${i}:${testVersionId}:site-${i}-b:` +
-                            `${testTimestamp}`,
-                        `bucket-${i}:key-${i}:${testVersionId}:site-${i}-c:` +
-                            `${testTimestamp}`,
-                        `bucket-${i}:key-${i}:${testVersionId}:site-${i}-d:` +
-                            `${testTimestamp}`,
-                        `bucket-${i}:key-${i}:${testVersionId}:site-${i}-e:` +
-                            `${testTimestamp}`,
-                    ];
-                    setKey(redisClient, keys, next);
+                    const member = `bucket-${i}:key-${i}:${testVersionId}`;
+                    async.series([
+                        next => addMembers(redisClient, `site-${i}-a`, [member],
+                            next),
+                        next => addMembers(redisClient, `site-${i}-b`, [member],
+                            next),
+                        next => addMembers(redisClient, `site-${i}-c`, [member],
+                            next),
+                        next => addMembers(redisClient, `site-${i}-d`, [member],
+                            next),
+                        next => addMembers(redisClient, `site-${i}-e`, [member],
+                            next),
+                    ], next);
                 }, err => {
                     assert.ifError(err);
                     const body = JSON.stringify(reqBody);
