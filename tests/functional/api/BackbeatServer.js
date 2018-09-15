@@ -1303,7 +1303,7 @@ describe('Backbeat Server', () => {
 
             it('should get correct data at scale for POST route: /_/crr/failed',
             function f(done) {
-                this.timeout(60000);
+                this.timeout(30000);
                 const reqBody = [];
                 async.timesLimit(10, 10, (i, next) => {
                     reqBody.push({
