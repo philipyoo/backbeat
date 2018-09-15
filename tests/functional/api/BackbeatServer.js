@@ -36,10 +36,19 @@ function getUrl(options, path) {
 }
 
 function addMembers(redisClient, site, members, cb) {
-    let score = 1536904800000;
+    const statsClient = new StatsModel(redisClient);
+    const epoch = Date.now();
+    const date = new Date(epoch);
+    const twelveHouseAgo = epoch - (60 * 60 * 1000) * 12;
+    let score = statsClient.normalizeTimestampByHour(new Date(twelveHouseAgo));
     const key = `${TEST_REDIS_KEY_FAILED_CRR}:${site}:${score}`;
     const cmds = members.map(member => (['zadd', key, ++score, member]));
-    console.log({ cmd: cmds[0] });
+    redisClient.batch(cmds, cb);
+}
+
+function addManyMembers(redisClient, site, members, normalizedScore, score, cb) {
+    const key = `${TEST_REDIS_KEY_FAILED_CRR}:${site}:${normalizedScore}`;
+    const cmds = members.map(member => (['zadd', key, ++score, member]));
     redisClient.batch(cmds, cb);
 }
 
@@ -900,7 +909,7 @@ describe('Backbeat Server', () => {
 
             before(done => deleteKeys(redisClient, done));
 
-            afterEach(done => deleteKeys(redisClient, done));
+            // afterEach(done => deleteKeys(redisClient, done));
 
             it('should get correct data for GET route: /_/crr/failed when no ' +
             'key has been created', done => {
@@ -1038,62 +1047,58 @@ describe('Backbeat Server', () => {
                 ], done);
             });
 
-            // TODO: Update this test.
-            it('should get correct data at scale for GET route: /_/crr/failed',
+            // TODO: Add test for fetching across sorted sets.
+
+            it('should get correct data at scale for GET route: ' +
+            '/_/crr/failed when failures occur in the same hour',
             function f(done) {
                 this.timeout(30000);
-                // Set non-matching keys so that recursive condition is met.
-                async.timesLimit(500, 10, (i, next) => {
-                    const keys = ['a', 'b', 'c', 'd', 'e'];
-                    setDummyKey(redisClient, keys, next);
+                const statsClient = new StatsModel(redisClient);
+                let epoch = Date.now();
+                const date = new Date(epoch);
+                const twelveHouseAgo = epoch - (60 * 60 * 1000) * 12;
+                let normalizedScore = statsClient
+                    .normalizeTimestampByHour(new Date(twelveHouseAgo));
+                return async.timesLimit(2000, 10, (i, next) => {
+                    const members = [
+                        `bucket-${i}:key-a-${i}:versionId-${i}`,
+                        `bucket-${i}:key-b-${i}:versionId-${i}`,
+                        `bucket-${i}:key-c-${i}:versionId-${i}`,
+                        `bucket-${i}:key-d-${i}:versionId-${i}`,
+                        `bucket-${i}:key-e-${i}:versionId-${i}`,
+                    ];
+                    epoch += 5;
+                    return addManyMembers(redisClient, 'test-site', members,
+                        normalizedScore, epoch, next);
                 }, err => {
-                    if (err) {
-                        return done(err);
-                    }
-                    return async.timesLimit(2000, 10, (i, next) => {
-                        const keys = [
-                            `bucket-${i}:key-${i}:versionId-${i}:site-${i}-a:` +
-                                `${testTimestamp}`,
-                            `bucket-${i}:key-${i}:versionId-${i}:site-${i}-b:` +
-                                `${testTimestamp}`,
-                            `bucket-${i}:key-${i}:versionId-${i}:site-${i}-c:` +
-                                `${testTimestamp}`,
-                            `bucket-${i}:key-${i}:versionId-${i}:site-${i}-d:` +
-                                `${testTimestamp}`,
-                            `bucket-${i}:key-${i}:versionId-${i}:site-${i}-e:` +
-                                `${testTimestamp}`,
-                        ];
-                        setKey(redisClient, keys, next);
-                    }, err => {
-                        assert.ifError(err);
-                        const dummyKeyCount = 500 * 5;
-                        const keyCount = 2000 * 5;
-                        const scanCount = 1000;
-                        const reqCount = (keyCount + dummyKeyCount) / scanCount;
-                        const set = new Set();
-                        let marker = 0;
-                        async.timesSeries(reqCount, (i, next) =>
-                            getRequest(`/_/crr/failed?marker=${marker}`,
-                            (err, res) => {
-                                assert.ifError(err);
-                                res.Versions.forEach(version => {
-                                    // Ensure we have no duplicate results.
-                                    assert(!set.has(version.StorageClass));
-                                    set.add(version.StorageClass);
-                                });
-                                if (res.IsTruncated === false) {
-                                    assert.strictEqual(res.NextMarker,
-                                        undefined);
-                                    assert.strictEqual(set.size, keyCount);
-                                    return done();
-                                }
-                                assert.strictEqual(res.IsTruncated, true);
-                                assert.strictEqual(
-                                    typeof(res.NextMarker), 'number');
-                                marker = res.NextMarker;
-                                return next();
-                            }), done);
-                    });
+                    assert.ifError(err);
+                    const memberCount = 2000 * 5;
+                    const reqCount = memberCount;
+                    const set = new Set();
+                    let marker = 0;
+                    async.timesSeries(10, (i, next) =>
+                        getRequest('/_/crr/failed?' +
+                            `marker=${marker}&sitename=test-site`, (err, res) => {
+                            console.log(res);
+                            assert.ifError(err);
+                            res.Versions.forEach(version => {
+                                // Ensure we have no duplicate results.
+                                assert(!set.has(version.Key), `duplicate key: ${version.Key}`);
+                                set.add(version.Key);
+                            });
+                            if (res.IsTruncated === false) {
+                                console.log('IS TRUCATED!!');
+                                assert.strictEqual(res.NextMarker,
+                                    undefined);
+                                assert.strictEqual(set.size, memberCount);
+                                return done();
+                            }
+                            assert.strictEqual(res.IsTruncated, true);
+                            assert.strictEqual(
+                                typeof(res.NextMarker), 'number');
+                            marker = res.NextMarker;
+                            return next();
+                        }), done);
                 });
             });
 
@@ -1159,7 +1164,8 @@ describe('Backbeat Server', () => {
                 });
             });
 
-            it.only('should get correct data for GET route: /_/crr/failed when no ' +
+            // TODO: Update this method.
+            it('should get correct data for GET route: /_/crr/failed when no ' +
             'key has been matched', done => {
                 const body = JSON.stringify([{
                     Bucket: 'bucket',

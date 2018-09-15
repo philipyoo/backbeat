@@ -3,6 +3,7 @@ const assert = require('assert');
 const ObjectFailureEntry =
     require('../../../extensions/replication/utils/ObjectFailureEntry');
 
+// TODO: Update this class.
 describe('ObjectFailureEntry helper class', () => {
     const key = 'bb:crr:failed:test-bucket:test-key:test-versionId:test-site:' +
         '0123456789';
