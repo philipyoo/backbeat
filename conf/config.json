@@ -97,12 +97,12 @@
             "monitorReplicationFailureExpiryTimeS": 86400,
             "queueProcessor": {
                 "groupId": "backbeat-replication-group",
-                "retryTimeoutS": 300,
+                "retryTimeoutS": 1,
                 "concurrency": 10
             },
             "replicationStatusProcessor": {
                 "groupId": "backbeat-replication-group",
-                "retryTimeoutS": 300,
+                "retryTimeoutS": 1,
                 "concurrency": 10
             }
         },
