@@ -35,7 +35,7 @@ describe('get Redis keys helper methods', () => {
         () => {
             const key = getObjectBytesKey('a', 'b', 'c', 'd');
             assert.strictEqual(key, `a:b:c:d:${redisKeys.objectBytes}`);
-        }
+        });
     });
 
     describe('getObjectBytesDoneKey', () => {
@@ -43,6 +43,6 @@ describe('get Redis keys helper methods', () => {
         () => {
             const key = getObjectBytesDoneKey('a', 'b', 'c', 'd');
             assert.strictEqual(key, `a:b:c:d:${redisKeys.objectBytesDone}`);
-        }
+        });
     });
 });
