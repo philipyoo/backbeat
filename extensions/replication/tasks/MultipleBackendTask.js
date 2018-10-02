@@ -191,28 +191,52 @@ class MultipleBackendTask extends ReplicateObject {
             });
         }
         if (sourceEntry.getReplicationIsNFS()) {
-            return this._checkObjectState(sourceEntry, destEntry, log, err => {
+            return this._checkMPUState(sourceEntry, destEntry, uploadId, log,
+            err => {
                 if (err) {
-                    if (err && !err.InvalidObjectState) {
-                        return doneOnce(err);
-                    }
-                    // Skip the error since we first want to abort
-                    return this._multipleBackendAbortMPU(sourceEntry, destEntry,
-                        uploadId, log, err => {
-                            if (err) {
-                                return doneOnce(err);
-                            }
-                            // Do not set status to FAILED if it's aborted. We
-                            // want to skip silently.
-                            return done(errors.InvalidObjectState);
-                        });
+                    console.log('hello3.1');
+                    return doneOnce(err);
                 }
+                console.log('hello3.2');
                 return this._putMPUPart(sourceEntry, destEntry, sourceReq, size,
                     uploadId, partNumber, log, doneOnce);
             });
         }
         return this._putMPUPart(sourceEntry, destEntry, sourceReq, size,
             uploadId, partNumber, log, doneOnce);
+    }
+
+    /**
+     * Wrapper for handling an ongoing MPU.
+     * @param {ObjectQueueEntry} sourceEntry - The source object entry
+     * @param {ObjectQueueEntry} destEntry - The destination object entry
+     * @param {Werelogs} log - The logger instance
+     * @param {Function} cb - The callback to call
+     * @return {undefined}
+     */
+    _checkMPUState(sourceEntry, destEntry, uploadId, log, cb) {
+        // TODO: Add debug logs
+        return this._checkObjectState(sourceEntry, destEntry, log, err => {
+            if (err) {
+                if (err && !err.InvalidObjectState) {
+                    console.log('hello6', err);
+                    return cb(err);
+                }
+                console.log('hello6.1', uploadId, sourceEntry.getContentLength());
+                return this._multipleBackendAbortMPU(sourceEntry, destEntry,
+                    uploadId, log, err => {
+                        if (err) {
+
+                        }
+                        // The latest object has different content so an attempt
+                        // at CRR will fail in CloudServer. We can safely skip
+                        // this entry because it is not the latest object.
+                        return cb(errors.InvalidObjectState);
+                    });
+            }
+            console.log('hello7');
+            return cb();
+        });
     }
 
     /**
@@ -340,6 +364,17 @@ class MultipleBackendTask extends ReplicateObject {
         if (sourceReq) {
             attachReqUids(sourceReq, log);
             sourceReq.on('error', err => {
+                if (sourceEntry.getReplicationIsNFS()) {
+                    const sourceReqErr = err;
+                    console.log('hello1');
+                    return this._checkMPUState(sourceEntry, destEntry, uploadId,
+                    log, err => {
+                        if (err) {
+                            return doneOnce(err);
+                        }
+                        return doneOnce(sourceReqErr);
+                    });
+                }
                 // eslint-disable-next-line no-param-reassign
                 err.origin = 'source';
                 if (err.statusCode === 404) {
@@ -357,6 +392,18 @@ class MultipleBackendTask extends ReplicateObject {
             });
             incomingMsg = sourceReq.createReadStream();
             incomingMsg.on('error', err => {
+                if (sourceEntry.getReplicationIsNFS()) {
+                    const incomingMsgErr = err;
+                    console.log('hello2');
+                    return this._checkMPUState(sourceEntry, destEntry, uploadId,
+                    log, err => {
+                        if (err) {
+                            return doneOnce(err);
+                        }
+                        // TODO: handle as below...
+                        return doneOnce(incomingMsgErr);
+                    });
+                }
                 if (err.statusCode === 404) {
                     return doneOnce(errors.ObjNotFound);
                 }
@@ -385,8 +432,37 @@ class MultipleBackendTask extends ReplicateObject {
             Body: incomingMsg,
         });
         attachReqUids(destReq, log);
+        if (sourceEntry.getReplicationIsNFS()) {
+            console.log('destReq ERR 2', uploadId);
+            return this._checkMPUState(sourceEntry, destEntry, uploadId,
+            log, err => {
+                if (err) {
+                    return doneOnce(err);
+                }
+                return destReq.send((err, data) => {
+                    if (err) {
+                        console.log('destReq ERR 2', uploadId);
+                        // eslint-disable-next-line no-param-reassign
+                        err.origin = 'source';
+                        log.error('an error occurred on putting MPU part to S3', {
+                            method: 'MultipleBackendTask._putMPUPart',
+                            entry: destEntry.getLogInfo(),
+                            origin: 'target',
+                            peer: this.destBackbeatHost,
+                            error: err.message,
+                        });
+                        return doneOnce(err);
+                    }
+                    const extMetrics = getExtMetrics(this.site, size, sourceEntry);
+                    return this.mProducer.publishMetrics(extMetrics,
+                        metricsTypeCompleted, metricsExtension, () =>
+                        doneOnce(null, data));
+                });
+            });
+        }
         return destReq.send((err, data) => {
             if (err) {
+                console.log('destReq ERR 1', uploadId);
                 // eslint-disable-next-line no-param-reassign
                 err.origin = 'source';
                 log.error('an error occurred on putting MPU part to S3', {
@@ -671,6 +747,7 @@ class MultipleBackendTask extends ReplicateObject {
                 }
                 // eslint-disable-next-line no-param-reassign
                 err.origin = 'source';
+                // TODO: Check if NFS here as well.
                 log.error('an error occurred when streaming data from S3', {
                     entry: destEntry.getLogInfo(),
                     method: 'MultipleBackendTask._getAndPutPartOnce',
@@ -706,6 +783,10 @@ class MultipleBackendTask extends ReplicateObject {
      */
     _checkObjectState(sourceEntry, destEntry, log, cb) {
         return this._getSourceMD(sourceEntry, destEntry, log, (err, res) => {
+            if (err && err.code === 'ObjNotFound') {
+                // The source object was deleted, so we skip CRR here.
+                return cb(errors.InvalidObjectState);
+            }
             if (err) {
                 return cb(err);
             }
