@@ -1,14 +1,16 @@
-# Generic Metadata Ingestion to MongoDB
+# Metadata Ingestion from RING to Zenko
 
 ## Description
 
 This is the design document discussing the ingestion process of existing metadata
-into Zenko with MongoDB.
+from the RING into Zenko with MongoDB.
 
 The primary use case is to copy the existing metadata from the RING/S3 Connector
-and ingest into the MongoDB backend that is used with Zenko so that users can conduct
-metadata search; future use cases will include copying metadata from existing storage
-solutions on AWS or Azure to MongoDB for search.
+and ingest into the MongoDB backend that is used with Zenko so that users can
+connect existing buckets on RING to be managed by Zenko. This would allow users
+to complete operations such as metadata search and CRR. The ingestion process will
+also enable out-of-band updates. This will allow operations made directly to the RING
+to update and be reflected on Zenko. 
 
 This specific development will allow Zenko instances to copy and ingest existing
 metadata, copying the information from the raft logs completely and syncing MongoDB
@@ -17,39 +19,41 @@ to be a parallel metadata database.
 ## Purpose
 
 The primary purpose is to copy all existing metadata from pre-existing storage solutions
-to MongoDB in Zenko. This will allow users to search the metadata that is stored
-in MongoDB. This will also allow MongoDB to be used in parallel with the existing
-metadata servers with S3 Connector, so that the primary metadata backend can be
-changed between the metadata servers and the MongoDB backend.
+to MongoDB in Zenko. The imported metadata will allow users to manage the bucket
+and search the metadata that is stored in MongoDB.
 
 ## Design
 
-The proposed design will be as follows:
+The ingestion process would be initiated bucket by bucket, as specified by the user.
 
-* First, on startup, determine if this is a fresh install of Zenko or an upgrade
-  installation.
-    * This can be determined by checking if Zookeeper has stored a sequence ID.
-* If this is a fresh install of Zenko, we will pause the live log processing to
-  ingest previously existing metadata.
-    * Record the last sequence ID from the Metadata server (send a query using the
+The proposed work flow will be as follows:
+* A RING bucket will be added as a storage location. An ingestion workflow will be
+  applied to a bucket created by the user using the created storage location, and
+  the option for `bucketMatch` will be true. This will allow 1 to 1 mapping between
+  the bucket defined through Zenko and the RING bucket.
+* Upon initiating the ingestion workflow:
+    * Record the last sequence ID from the Metadata Server (send a query using the
       `metadataWrapper`) that is part of the S3 connector - this will serve as a
       marker that will be stored as a `log offset` to bookmark the point between
       logs that existed prior to the start of the Zenko instance, and the point
       where new logs are added during the process where the old logs are copied.
     * From backbeat, we will use the S3 protocols to send the following requests
-      to the S3 connector:
-        * List all buckets that exist on the storage backend.
-        * For each bucket, list all objects in the buckets. This will return info
-          such as the `object key`, and if `versioning` is enabled, `version id`.
+      to the S3 connector: 
+        * For the specified bucket, list all objects in the buckets. This will return
+          info such as the `object key`, and if `versioning` is enabled, `version id`.
       Using the list of object keys, send a query directly to the metadata server
       with the `metadataWrapper` class in Arsenal.
         * This will get the JSON object for each object, which is put into kafka.
-* If the instance of Zenko is a fresh install or the ingestion process has completed,
-  resume queueing from raft logs using the last stored `sequence id` as the new
-  starting point.
 
 With this design, Backbeat will include a new populator which reads from the Metadata
 server and queues the logs to Kafka. The consumer will not need to be changed.
+
+On deployment of Zenko, we will have 1 ingestion populator pod and 5 ingestion processors
+pods. Each populator pod can host multiple ingestion populators, while each each processors
+pod can host multiple consumers.
+Each instance of an ingestion populator should control one and only one ingestion
+workflow. The logReader for each ingestion populator will be setup to source logs
+for the specified ingestion bucket.
 
 ## Dependencies
 
@@ -59,28 +63,31 @@ server and queues the logs to Kafka. The consumer will not need to be changed.
 
 ### Bucket/Object-Key Parity
 
-When ingesting pre-existing metadata, we will store all entries from one backend
-location (in this case, the RING/S3 Connector) into one bucket (one collection within           
-MongoDB), with the names of each object prefixed with the name of the bucket.
+The ingestion source is a bucket on RING registered as a storage location. When
+selecting the ingestion source and creating the destination bucket, `bucketMatch`
+will be set to true. This will limit the ingestion source to only allow 1 bucket
+attached to it, but this can ensure an exact match of object names (unlike the
+prefix schema used in Zenko locations that host multiple buckets).
 
 ## Background Information for Design
 
 * The `sequence ID` from Metadata Server will be in numerical order.
 * There will not be data that is put directly into the Zenko cloudserver - all
   data will be sent to the S3 Connector, and logs will come from Metadata Server.
-* There will not be pre-existing data in the Mongo database.
 
 ## Rejected Options
 
-* One of the designs proposed was to replicate and ingest data from buckets, one
-  bucket at a time. This would allow the user to customize which buckets to copy
-  metadata to MongoDB. This could cause some issues:
-
-  * The metadata servers and the MongoDB backend will have to constantly communicate
-    and keep track of which buckets have been replicated between one another.
-
-  * We will have to come up with an efficient way of filtering logs, which will be
-    more time consuming than simply using the filter that is built-in with MongoDB.
+* The option that was originally considered was to ingest entire RINGs in one setting,
+  upon starting Zenko. The ingestion populator and consumers would be created automatically
+  and begin listing all buckets and objects on the RING.
+    * For large RINGs with many objects, this would be a very heavy workload that
+      could take extremely long periods of time to run to completion.
+    * This also limits the flexibility for users, if they only wanted to ingest
+      and use one bucket with Zenko, they would still have to wait until all buckets
+      and objects were processed.
+    * This implementation also required a fresh install of Zenko, which would bar
+      users from making any changes or updates to the ingestion process after the
+      initial deployment.
 
 ## Diagram of work flow, to be updated
 
