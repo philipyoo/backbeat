@@ -140,6 +140,7 @@ class Config extends EventEmitter {
     }
 
     setIngestionSourceList(updatedSourceList) {
+        // TODO-FIX: consider formatting source items here rather than in mgmt
         this.ingestionSourceList = updatedSourceList;
         this.emit('ingestion-source-list-update');
     }

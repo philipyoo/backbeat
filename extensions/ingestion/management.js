@@ -58,15 +58,16 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
     // TODO: refine this config
     // Is prefix needed? Move cronRule out?
     const newIngestionSource = {
-        name: bucketName,
-        prefix: bucketName,
+        name: bucketName,  // want to change this to key: "bucketName"
+        prefix: bucketName,  // want to consider prefix to be source name
         cronRule: '*/5 * * * * *',
         zookeeperSuffix: `/${bucketName}`,
         host: wf.host,
         port: wf.port,
         https: wf.transport === 'https',
-        type: 'scality',
+        type: 'scality',  // TODO-FIX: type?
         raftCount: 8,
+        // enabled: wf.enabled,          // supports pause/resume
     };
     // TODO: should workflows have joi validation
 
