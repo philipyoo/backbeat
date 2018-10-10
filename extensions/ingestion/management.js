@@ -35,6 +35,7 @@ sources: [
         "host": "127.0.0.1",  // will this look the same for external srcs like aws
         "port": "9000",
         "transport": "http",
+        // some sort of credentials
     }
 ]
 */
@@ -61,13 +62,14 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
         name: bucketName,  // want to change this to key: "bucketName"
         prefix: bucketName,  // want to consider prefix to be source name
         cronRule: '*/5 * * * * *',
-        zookeeperSuffix: `/${bucketName}`,
+        zookeeperSuffix: `/${bucketName}`, // can remove this
         host: wf.host,
         port: wf.port,
         https: wf.transport === 'https',
         type: 'scality',  // TODO-FIX: type?
-        raftCount: 8,
-        // enabled: wf.enabled,          // supports pause/resume
+        raftCount: 8,  // remove this?
+        // need credentials
+        // enabled: wf.enabled,          // support for pause/resume
     };
     // TODO: should workflows have joi validation
 
