@@ -25,6 +25,7 @@ werelogs.configure({ level: config.log.logLevel,
 
 // TODO-FIX: Before proceeding, either in management, cloudserver, or here,
 //           need to validate users input "host"/"port" source.
+// NOTE: Validation is done in orbit when a new storage location is added
 
 const activeIngestionSources = {};
 

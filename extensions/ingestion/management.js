@@ -1,11 +1,23 @@
+const async = require('async');
 const AWS = require('aws-sdk');
-const url = require('url');
 const werelogs = require('werelogs');
 
 const config = require('../../conf/Config');
 const management = require('../../lib/management/index');
 
 const logger = new werelogs.Logger('mdManagement:ingestion');
+
+const locationTypeMatch = {
+    'location-mem-v1': 'mem',
+    'location-file-v1': 'file',
+    'location-azure-v1': 'azure',
+    'location-do-spaces-v1': 'aws_s3',
+    'location-aws-s3-v1': 'aws_s3',
+    'location-wasabi-v1': 'aws_s3',
+    'location-gcp-v1': 'gcp',
+    'location-scality-ring-s3-v1': 'aws_s3',
+    'location-ceph-radosgw-s3-v1': 'aws_s3',
+};
 
 // Can we use service account to perform all aws actions for us?
 function getS3Client() {
@@ -34,42 +46,36 @@ function getS3Client() {
 // creation of workflow. This will avoid overcrowding the list of storage
 // locations.
 
-// suggestion for updating source list configs
-// How do we determine logSource for locations besides ring?
-// -> "logSource": "bucketd",  // options === ['bucketd','mongo','dmd']
 // For pause/resume consideration, have a field/flag "enabled"
 // -> "enabled": true/false
 
 /*
-wf = {
-    bucketName: '',
-    accessKey: '',
-    secretKey: '',
-    endpoint: '',  // optional (i.e. ring)
+workflow = {
+    sourceBucketName: '', // bucket to ingest from
+    zenkoBucketName: '',  // bucket to ingest to
+    locationName: '',     // source location name - user defined location name
+    locationType: '',     // i.e. 'location-azure-v1'
+    host: '',
+    port: 8000,
+    transport: '',
     enabled: true, // for later use (maybe pause/resume)
 }
 
-
 sources: [
     {
-        "name": "",             // ingestion workflow name
-        "accessKey": "",        // source creds
-        "secretKey": "",
-        "bucketName": "",       // source bucket name
-        "locationName": "",     // "us-east-1"
-        "locationType": "",     // "aws_s3", "gcp", "azure", "scality"
-        // optional - ring requires
-        "details": {
-            "host": "",
-            "port": "",
-            "transport": "",
-        }
+        "sourceBucketName": "",       // source bucket name (i.e. ring, aws)
+        "zenkoBucketName": "",
+        "host": "",
+        "port": 8000,
+        "transport": "",
+        "locationName": "",     // my-azure-site
+        "locationType": "",     // 'location-azure-v1'
+
+        // can't tell if below are needed
+        "locationName": "",     // source location name
     }
 ]
 */
-
-// TODO: Determine logSource in management
-//   i.e. "bucketd", "mongo", "dmd", etc
 
 function _addToIngestionSourceList(bucketName, workflows, cb) {
     // A bucket source can only have a single workflow
@@ -87,36 +93,68 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
 
     const wf = workflows[0];
 
-    const details = {};
-    if (wf.endpoint) {
-        const { protocol, hostname, port } = url.parse(wf.endpoint);
-
-        details.host = hostname;
-        details.port = port;
-        details.transport = protocol.slice(0, -1);
+    if (wf.sourceBucketName !== bucketName) {
+        // TODO-FIX: better handling
+        logger.fatal('management overlay data mismatch');
     }
 
     const newIngestionSource = {
-        bucketName: wf.bucketName,
-        accessKey: wf.accessKey,
-        secretKey: wf.secretKey,
-        details,
-        // how to get the following?
-        locationType: 'scality',  // 'aws_s3', 'gcp', 'azure', 'scality'
-
-        type: 'scality',  // TODO-FIX: type?
+        // bucket to ingest from
+        sourceBucketName: wf.sourceBucketName,
+        // bucket to ingest to
+        zenkoBucketName: wf.zenkoBucketName,
+        locationType: locationTypeMatch[wf.locationType],
+        host: wf.host,
+        port: wf.port,
+        transport: wf.transport,
         // enabled: wf.enabled,          // support for pause/resume
     };
 
     const currentList = config.getIngestionSourceList();
-    currentList[bucketName] = newIngestionSource;
-    config.setIngestionSourceList(currentList);
+    const indexPos = currentList.findIndex(i =>
+        i.sourceBucketName === newIngestionSource.sourceBucketName);
 
-    logger.debug('added or updated an ingestion source', {
+    // if updating an existing ingestion source
+    if (indexPos >= 0) {
+        logger.debug('updated new ingestion source', {
+            bucket: bucketName,
+            method: 'management::ingestion::_addToIngestionSourceList',
+        });
+        // this is an update to the ingestion source
+        currentList.splice(indexPos, 1, newIngestionSource);
+        config.setIngestionSourceList(currentList);
+        return cb();
+    }
+
+    // if adding a new ingestion source
+    logger.debug('added new ingestion source', {
         bucket: bucketName,
         method: 'management::ingestion::_addToIngestionSourceList',
     });
-    return cb();
+    currentList.push(newIngestionSource);
+    config.setIngestionSourceList(currentList);
+
+    const s3client = getS3Client();
+    return async.series([
+        next => {
+            const params = {
+                Bucket: wf.zenkoBucketName,
+                // TODO: do we specify location name as location constraint
+                CreateBucketConfiguration: {
+                    LocationConstraint: wf.locationName,
+                },
+            };
+            s3client.createBucket(params, next);
+        },
+        // default it to versioned bucket
+        next => {
+            const params = {
+                Bucket: wf.zenkoBucketName,
+                VersioningConfiguration: { Status: 'Enabled' },
+            };
+            s3client.putBucketVersioning(params, next);
+        },
+    ], cb);
 }
 
 function _removeFromIngestionSourceList(bucketName, cb) {

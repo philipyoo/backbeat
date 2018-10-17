@@ -48,15 +48,13 @@
             "cronRule": "*/5 * * * * *",
             "sources": [
                 {
-                    "name": "source1",
-                    "prefix": "source1",
-                    "cronRule": "*/5 * * * * *",
-                    "zookeeperSuffix": "/source1",
+                    "sourceBucketName": "ring-source-bucket",
+                    "zenkoBucketName": "my-zenko-bucket",
+                    "locationType": "scality",
+                    "locationName": "my-ring-site",
                     "host": "localhost",
                     "port": 8000,
-                    "https": false,
-                    "type": "scality",
-                    "raftCount": 8
+                    "transport": "http"
                 }
             ]
         },
