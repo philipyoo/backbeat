@@ -130,7 +130,9 @@ function initAndStart() {
                         });
                         return next(err);
                     }
-                    activeIngestionSources[source.zenkoBucketName] = true;
+                    const key = `${source.sourceBucketName}:` +
+                        `${source.zenkoBucketName}`;
+                    activeIngestionSources[key] = true;
                     return next();
                 });
             }, err => {
@@ -146,10 +148,6 @@ function initAndStart() {
 
 // dynamically add/remove sources
 config.on('ingestion-source-list-update', () => {
-    // TODO-FIX: should each source be name + prefix?
-    // We can potentially have buckets with same name in different locations
-    // addNewLogSource(newSource, cb)
-    // closeLogState(sourceName, done)
     const ingestionSources = config.getIngestionSourceList();
     extConfigs.ingestion.sources = ingestionSources;
 
@@ -159,6 +157,7 @@ config.on('ingestion-source-list-update', () => {
         .concat(updatedSources))];
 
     async.each(allSources, (source, next) => {
+        const key = `${source.sourceBucketName}:${source.zenkoBucketName}`;
         if (updatedSources.includes(source)) {
             if (!activeSources.includes(source)) {
                 ingestionPopulator.addNewLogSource(source, err => {
@@ -169,7 +168,7 @@ config.on('ingestion-source-list-update', () => {
                         });
                         return next(err);
                     }
-                    activeIngestionSources[source.zenkoBucketName] = true;
+                    activeIngestionSources[key] = true;
                     return next();
                 });
             }
@@ -183,7 +182,7 @@ config.on('ingestion-source-list-update', () => {
                     });
                     return next(err);
                 }
-                delete activeIngestionSources[source.zenkoBucketName];
+                delete activeIngestionSources[key];
                 return next();
             });
         }

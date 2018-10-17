@@ -159,6 +159,7 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
             s3client.createBucket(params, next);
         },
         // default it to versioned bucket
+        // TODO-FIX: first check versioning..
         next => {
             const params = {
                 Bucket: wf.zenkoBucketName,

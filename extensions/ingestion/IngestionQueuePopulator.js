@@ -10,11 +10,15 @@ class IngestionQueuePopulator extends QueuePopulatorExtension {
     }
 
     createZkPath(cb, source) {
+        // TODO-FIX: no raftCount in configs
         if (!source || !source.raftCount) {
             return cb();
         }
         const { zookeeperPath } = this.extConfig;
-        const bucketPrefix = source.prefix ? source.prefix : source.name;
+        // TODO-FIX: no prefix in configs
+        const bucketPrefix = source.prefix ?
+            source.prefix : source.zenkoBucketName;
+        // TODO-FIX: no raftCount in configs
         return async.times(source.raftCount, (index, next) => {
             const path = `${zookeeperPath}/${bucketPrefix}/provisions/${index}`;
             return this.zkClient.mkdirp(path, err => {
@@ -31,7 +35,6 @@ class IngestionQueuePopulator extends QueuePopulatorExtension {
             });
         }, cb);
     }
-
 
     _setupZookeeper(done) {
         const populatorZkPath = this.extConfig.zookeeperPath;
