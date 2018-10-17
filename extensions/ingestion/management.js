@@ -80,7 +80,7 @@ sources: [
 function _addToIngestionSourceList(bucketName, workflows, cb) {
     // A bucket source can only have a single workflow
     if (workflows.length > 1) {
-        logger.fatal('something went wrong in workflow updates', {
+        logger.fatal('workflow count is greater than 1', {
             method: 'management::ingestion::_addToIngestionSourceList',
         });
         const error = {
@@ -94,8 +94,13 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
     const wf = workflows[0];
 
     if (wf.sourceBucketName !== bucketName) {
-        // TODO-FIX: better handling
         logger.fatal('management overlay data mismatch');
+        const error = {
+            message: 'something went wrong in ingestion workflow updates',
+            name: 'management::ingestion',
+            code: 500,
+        };
+        return cb(error);
     }
 
     const newIngestionSource = {
@@ -137,6 +142,13 @@ function _addToIngestionSourceList(bucketName, workflows, cb) {
     const s3client = getS3Client();
     return async.series([
         next => {
+            // TODO-FIX:
+            // zenko bucket should be brand new. If any error occurs here,
+            // that means the bucket name is taken, so error out.
+            // To best avoid management errors, a pre-check should be done
+            // prior to reaching management stage here.
+            // Maybe orbit can check to see if bucket exists on ingestion
+            // setup. If it doesn't exist, then allow setup.
             const params = {
                 Bucket: wf.zenkoBucketName,
                 // TODO: do we specify location name as location constraint

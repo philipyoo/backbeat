@@ -1,5 +1,6 @@
 const async = require('async');
 const schedule = require('node-schedule');
+const zookeeper = require('node-zookeeper-client');
 
 const werelogs = require('werelogs');
 
@@ -15,17 +16,12 @@ const mConfig = config.metrics;
 const rConfig = config.redis;
 const s3Config = config.s3;
 const IngestionPopulator = require('../lib/queuePopulator/IngestionPopulator');
-const zookeeper = require('node-zookeeper-client');
 
 const { HealthProbeServer } = require('arsenal').network.probe;
 const log = new werelogs.Logger('Backbeat:IngestionPopulator');
 
 werelogs.configure({ level: config.log.logLevel,
     dump: config.log.dumpLevel });
-
-// TODO-FIX: Before proceeding, either in management, cloudserver, or here,
-//           need to validate users input "host"/"port" source.
-// NOTE: Validation is done in orbit when a new storage location is added
 
 const activeIngestionSources = {};
 
@@ -134,7 +130,7 @@ function initAndStart() {
                         });
                         return next(err);
                     }
-                    activeIngestionSources[source.name] = true;
+                    activeIngestionSources[source.zenkoBucketName] = true;
                     return next();
                 });
             }, err => {
@@ -158,7 +154,7 @@ config.on('ingestion-source-list-update', () => {
     extConfigs.ingestion.sources = ingestionSources;
 
     const activeSources = Object.keys(activeIngestionSources);
-    const updatedSources = ingestionSources.map(i => i.name);
+    const updatedSources = ingestionSources.map(i => i.zenkoBucketName);
     const allSources = [...new Set(activeSources
         .concat(updatedSources))];
 
@@ -168,30 +164,26 @@ config.on('ingestion-source-list-update', () => {
                 ingestionPopulator.addNewLogSource(source, err => {
                     if (err) {
                         log.error('error adding ingestion source', {
-                            source: source.name,
-                            prefix: source.prefix,
-                            type: source.type,
+                            location: source.locationName,
                             method: 'IngestionPopulator::task',
                         });
                         return next(err);
                     }
-                    activeIngestionSources[source.name] = true;
+                    activeIngestionSources[source.zenkoBucketName] = true;
                     return next();
                 });
             }
         } else {
             // this source is no longer in configs
-            ingestionPopulator.closeLogState(source.name, err => {
+            ingestionPopulator.closeLogState(source.zenkoBucketName, err => {
                 if (err) {
                     log.error('error removing ingestion source', {
-                        source: source.name,
-                        prefix: source.prefix,
-                        type: source.type,
+                        location: source.locationName,
                         method: 'IngestionPopulator::task',
                     });
                     return next(err);
                 }
-                delete activeIngestionSources[source.name];
+                delete activeIngestionSources[source.zenkoBucketName];
                 return next();
             });
         }
