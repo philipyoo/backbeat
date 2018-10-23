@@ -68,6 +68,10 @@ class Config {
             parsedConfig.internalHttps = this._parseCertFilePaths(
                 parsedConfig.internalCertFilePaths);
         }
+        if (process.env.CI === 'true' && process.env.CI_AUTH_TYPE === 'role') {
+            parsedConfig.extensions.replication.source.auth.type = 'role';
+            delete parsedConfig.extensions.replication.source.auth.account;
+        }
         // config is validated, safe to assign directly to the config object
         Object.assign(this, parsedConfig);
     }
