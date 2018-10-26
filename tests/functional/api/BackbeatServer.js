@@ -1496,6 +1496,43 @@ describe('Backbeat Server', () => {
             const futureDate = new Date();
             futureDate.setHours(futureDate.getHours() + 5);
 
+            function resetZkState(cb) {
+                async.series([
+                    next => {
+                        // emulate first site to be active (not paused)
+                        const path = `${ZK_TEST_CRR_STATE_PATH}/${firstSite}`;
+                        const data =
+                            Buffer.from(JSON.stringify({ paused: false }));
+                        zkClient.setData(path, data, next);
+                    },
+                    next => {
+                        // emulate second site to be paused
+                        const path = `${ZK_TEST_CRR_STATE_PATH}/${secondSite}`;
+                        const data = Buffer.from(JSON.stringify({
+                            paused: true,
+                            scheduledResume: futureDate.toString(),
+                        }));
+                        zkClient.setData(path, data, next);
+                    },
+                ], cb);
+            }
+
+            function setExpectedState(site, action) {
+                const state = {};
+                if (action === 'pauseService') {
+                    state.paused = true;
+                } else if (action === 'resumeService') {
+                    state.paused = false;
+                }
+                const data = Buffer.from(JSON.stringify(state));
+                const path = `${ZK_TEST_CRR_STATE_PATH}/${site}`;
+                zkClient.setData(path, data, err => {
+                    if (err) {
+                        process.stdout.write('failed to set expect zookeeper data');
+                    }
+                });
+            }
+
             function setupZkTestState(cb) {
                 const { connectionString } = config.zookeeper;
                 zkClient = zookeeper.createClient(connectionString);
@@ -1542,21 +1579,24 @@ describe('Backbeat Server', () => {
                 channel1 = `${topic}-${firstSite}`;
                 redis1.subscribe(channel1, err => assert.ifError(err));
                 redis1.on('message', (channel, message) => {
+                    setExpectedState(firstSite, JSON.parse(message).action);
                     cache1.push({ channel, message });
                 });
 
                 channel2 = `${topic}-${secondSite}`;
                 redis2.subscribe(channel2, err => assert.ifError(err));
                 redis2.on('message', (channel, message) => {
+                    setExpectedState(firstSite, JSON.parse(message).action);
                     cache2.push({ channel, message });
                 });
 
                 setupZkTestState(done);
             });
 
-            afterEach(() => {
+            afterEach(done => {
                 cache1 = [];
                 cache2 = [];
+                resetZkState(done);
             });
 
             after(() => {
@@ -1718,11 +1758,11 @@ describe('Backbeat Server', () => {
 
             skipNotImplemented(svc.name)('should receive a scheduled resume ' +
             'request with specified hours from route ' +
-            `/_/${svc.name}/resume/${firstSite}/schedule`,
+            `/_/${svc.name}/resume/${secondSite}/schedule`,
             done => {
                 const options = Object.assign({}, defaultOptions, {
                     method: 'POST',
-                    path: `/_/${svc.name}/resume/${firstSite}/schedule`,
+                    path: `/_/${svc.name}/resume/${secondSite}/schedule`,
                 });
                 const body = JSON.stringify({ hours: 1 });
                 makeRequest(options, body, (err, res) => {
@@ -1731,9 +1771,9 @@ describe('Backbeat Server', () => {
                         getResponseBody(res, err => {
                             assert.ifError(err);
 
-                            assert.strictEqual(cache1.length, 1);
-                            assert.deepStrictEqual(cache1[0].channel, channel1);
-                            const message = JSON.parse(cache1[0].message);
+                            assert.strictEqual(cache2.length, 1);
+                            assert.deepStrictEqual(cache2[0].channel, channel2);
+                            const message = JSON.parse(cache2[0].message);
                             assert.equal('resumeService', message.action);
                             const date = new Date();
                             const scheduleDate = new Date(message.date);
@@ -1749,20 +1789,20 @@ describe('Backbeat Server', () => {
 
             skipNotImplemented(svc.name)('should receive a scheduled resume ' +
             'request without specified hours from route ' +
-            `/_/${svc.name}/resume/${firstSite}/schedule`,
+            `/_/${svc.name}/resume/${secondSite}/schedule`,
             done => {
                 const options = Object.assign({}, defaultOptions, {
                     method: 'POST',
-                    path: `/_/${svc.name}/resume/${firstSite}/schedule`,
+                    path: `/_/${svc.name}/resume/${secondSite}/schedule`,
                 });
                 makeRequest(options, emptyBody, err => {
                     assert.ifError(err);
 
                     setTimeout(() => {
-                        assert.strictEqual(cache1.length, 1);
-                        assert.deepStrictEqual(cache1[0].channel, channel1);
+                        assert.strictEqual(cache2.length, 1);
+                        assert.deepStrictEqual(cache2[0].channel, channel2);
 
-                        const message = JSON.parse(cache1[0].message);
+                        const message = JSON.parse(cache2[0].message);
                         assert.equal('resumeService', message.action);
 
                         const date = new Date();
