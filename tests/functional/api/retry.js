@@ -359,7 +359,7 @@ describe('CRR Retry feature', () => {
     it('should get correct data at scale for GET route: ' +
     '/_/crr/failed when failures occur across hours',
     function f(done) {
-        this.timeout(30000);
+        this.timeout(300000);
         const hours = Array.from(Array(24).keys());
         async.eachLimit(hours, 10, (hour, callback) => {
             const delta = (60 * 60 * 1000) * hour;
