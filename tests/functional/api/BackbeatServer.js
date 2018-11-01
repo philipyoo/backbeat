@@ -1500,14 +1500,14 @@ describe('Backbeat Server', () => {
                 async.series([
                     next => {
                         // emulate first site to be active (not paused)
-                        const path = `${ZK_TEST_CRR_STATE_PATH}/${firstSite}`;
+                        const path = `${svc.baseZkPath}/${firstSite}`;
                         const data =
                             Buffer.from(JSON.stringify({ paused: false }));
                         zkClient.setData(path, data, next);
                     },
                     next => {
                         // emulate second site to be paused
-                        const path = `${ZK_TEST_CRR_STATE_PATH}/${secondSite}`;
+                        const path = `${svc.baseZkPath}/${secondSite}`;
                         const data = Buffer.from(JSON.stringify({
                             paused: true,
                             scheduledResume: futureDate.toString(),
@@ -1525,10 +1525,11 @@ describe('Backbeat Server', () => {
                     state.paused = false;
                 }
                 const data = Buffer.from(JSON.stringify(state));
-                const path = `${ZK_TEST_CRR_STATE_PATH}/${site}`;
+                const path = `${svc.baseZkPath}/${site}`;
                 zkClient.setData(path, data, err => {
                     if (err) {
-                        process.stdout.write('failed to set expect zookeeper data');
+                        process.stdout.write(
+                            'failed to set expect zookeeper data');
                     }
                 });
             }
@@ -1743,7 +1744,7 @@ describe('Backbeat Server', () => {
             });
 
             skipNotImplemented(svc.name)('should get scheduled resume jobs ' +
-            ' for all sites using route ' +
+            'for all sites using route ' +
             `/_/${svc.name}/resume/all/schedule`, done => {
                 getRequest(`/_/${svc.name}/resume/all/schedule`, (err, res) => {
                     assert.ifError(err);
