@@ -73,6 +73,14 @@ class Config extends EventEmitter {
             this.bootstrapList = [];
         }
 
+        if (parsedConfig.extensions && parsedConfig.extensions.ingestion
+            && parsedConfig.extensions.ingestion.sources) {
+            this.ingestionSourceList =
+                parsedConfig.extensions.ingestion.sources;
+        } else {
+            this.ingestionSourceList = [];
+        }
+
         // whitelist IP, CIDR for health checks
         const defaultHealthChecks = ['127.0.0.1/8', '::1'];
         const healthChecks = parsedConfig.server.healthChecks;
@@ -161,6 +169,15 @@ class Config extends EventEmitter {
     getBootstrapList() {
         monitoringClient.crrSiteCount.set(this.bootstrapList.length);
         return this.bootstrapList;
+    }
+
+    setIngestionSourceList(updatedSourceList) {
+        this.ingestionSourceList = updatedSourceList;
+        this.emit('ingestion-source-list-update');
+    }
+
+    getIngestionSourceList() {
+        return this.ingestionSourceList;
     }
 
     setIsTransientLocation(locationName, isTransient) {
