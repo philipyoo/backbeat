@@ -73,6 +73,14 @@ class Config extends EventEmitter {
             this.bootstrapList = [];
         }
 
+        if (parsedConfig.extensions && parsedConfig.extensions.ingestion
+            && parsedConfig.extensions.ingestion.sources) {
+            this.ingestionSourceList =
+                parsedConfig.extensions.ingestion.sources;
+        } else {
+            this.ingestionSourceList = [];
+        }
+
         // whitelist IP, CIDR for health checks
         const defaultHealthChecks = ['127.0.0.1/8', '::1'];
         const healthChecks = parsedConfig.server.healthChecks;
@@ -161,6 +169,50 @@ class Config extends EventEmitter {
     getBootstrapList() {
         monitoringClient.crrSiteCount.set(this.bootstrapList.length);
         return this.bootstrapList;
+    }
+
+    /**
+     * add new ingestion source
+     * @param {Object} source - source object
+     * @param {String} source.name - source name
+     * @param {String} source.prefix - source prefix
+     * @return {undefined}
+     */
+    addIngestionSourceItem(source) {
+        // NOTE: need to make sure sync add and source doesn't already exist
+        const newSource = {
+            name: source.name,
+            prefix: source.prefix,
+            cronRule: '*/5 * * * * *',
+            zookeeperSuffix: `/${source.name}`,
+            host: 'localhost',
+            port: 8000,
+            https: false,
+            type: 'scality',
+            raftCount: 8,
+        };
+        this.ingestionSourceList.push(newSource);
+        this.emit('ingestion-source-list-update');
+    }
+
+    /**
+     * remove ingestion source
+     * @param {Object} source - source object
+     * @param {String} source.name - source name
+     * @param {String} source.prefix - source prefix
+     * @return {undefined}
+     */
+    removeIngestionSourceItem(source) {
+        const index = this.ingestionSourceList.findIndex(s =>
+            s.name === source.name && s.prefix === source.prefix);
+        if (index !== -1) {
+            this.ingestionSourceList.splice(index, 1);
+        }
+        this.emit('ingestion-source-list-update');
+    }
+
+    getIngestionSourceList() {
+        return this.ingestionSourceList;
     }
 
     setIsTransientLocation(locationName, isTransient) {
