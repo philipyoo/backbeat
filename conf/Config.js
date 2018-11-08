@@ -73,6 +73,9 @@ class Config extends EventEmitter {
             this.bootstrapList = [];
         }
 
+        // TODO: Hack to store location details, needed for ingestion
+        this.locationDetails = {};
+
         // whitelist IP, CIDR for health checks
         const defaultHealthChecks = ['127.0.0.1/8', '::1'];
         const healthChecks = parsedConfig.server.healthChecks;
@@ -169,6 +172,26 @@ class Config extends EventEmitter {
 
     getIsTransientLocation(locationName) {
         return this.transientLocations[locationName] || false;
+    }
+
+    // TODO: Hack to store location details - necessary for ingestion
+    cacheLocationDetails(locationConstraints) {
+        const ingestionTypeMatch = Object.assign({}, locationTypeMatch, {
+            'location-scality-ring-s3-v1': 'ring',
+        });
+
+        // refresh/reset
+        this.locationDetails = {};
+        Object.keys(locationConstraints).forEach(key => {
+            const locItem = locationConstraints[key];
+            this.locationDetails[key] = Object.assign({}, locItem.details, {
+                locationType: ingestionTypeMatch[locItem.locationType],
+            });
+        });
+    }
+
+    getCachedLocationDetails() {
+        return this.locationDetails;
     }
 }
 
