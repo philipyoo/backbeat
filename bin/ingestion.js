@@ -20,6 +20,13 @@ const log = new werelogs.Logger('Backbeat:IngestionPopulator');
 werelogs.configure({ level: config.log.logLevel,
     dump: config.log.dumpLevel });
 
+/*
+    TODO:
+        - initManagement layer to get bootstraplist + location detail updates
+        + queueBatch process to continuously process ingestion readers
+        + scheduler to query for ingestion buckets (move this to the populator)
+*/
+
 // TODO: based on source list config changes, dynamically add/remove
 const activeIngestionSources = [];
 
@@ -85,8 +92,19 @@ async.waterfall([
         const taskState = {
             batchInProgress: false,
         };
-        schedule.scheduleJob(qpConfig.cronRule, () => {
-            queueBatch(ingestionPopulator, taskState, qpConfig, log);
+        schedule.scheduleJob(ingestionExtConfigs.cronRule, () => {
+            ingestionPopulator.applyUpdates(err => {
+                // TODO
+                if (err) {
+                    log.error('failed to update ingestion readers', {
+                        method: 'IngestionPopulator.applyUpdates',
+                        error: err,
+                    });
+                    process.exit(1);
+                }
+                log.debug('updated active ingestion readers');
+                queueBatch(ingestionPopulator, taskState, qpConfig, log);
+            });
         });
         done();
     },

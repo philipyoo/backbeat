@@ -188,6 +188,7 @@ class Config extends EventEmitter {
                 locationType: ingestionTypeMatch[locItem.locationType],
             });
         });
+        this.emit('location-detail-update');
     }
 
     getCachedLocationDetails() {
