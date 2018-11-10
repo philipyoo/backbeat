@@ -7,6 +7,7 @@ const { HealthProbeServer } = require('arsenal').network.probe;
 
 const IngestionPopulator = require('../lib/queuePopulator/IngestionPopulator');
 const config = require('../conf/Config');
+const { initManagement } = require('../lib/management/index');
 
 const zkConfig = config.zookeeper;
 const kafkaConfig = config.kafka;
@@ -23,12 +24,7 @@ werelogs.configure({ level: config.log.logLevel,
 /*
     TODO:
         - initManagement layer to get bootstraplist + location detail updates
-        + queueBatch process to continuously process ingestion readers
-        + scheduler to query for ingestion buckets (move this to the populator)
 */
-
-// TODO: based on source list config changes, dynamically add/remove
-const activeIngestionSources = [];
 
 /* eslint-disable no-param-reassign */
 function queueBatch(ingestionPopulator, taskState, qConfig, log) {
@@ -67,10 +63,6 @@ function initIngestionReaders(ingestionPopulator, cb) {
                 });
                 return next(err);
             }
-            // TODO: config change. Should somehow depend on:
-            //       Storage Location Name + Local Zenko Bucket Name
-            const key = `${source.prefix}:${source.name}`;
-            activeIngestionSources.push(key);
             return next();
         });
     }, cb);
@@ -84,54 +76,70 @@ const healthServer = new HealthProbeServer({
     port: config.healthcheckServer.port,
 });
 
-async.waterfall([
-    done => ingestionPopulator.open(done),
-    // on init, setup active sources ingestion readers
-    done => initIngestionReaders(ingestionPopulator, done),
-    done => {
-        const taskState = {
-            batchInProgress: false,
-        };
-        schedule.scheduleJob(ingestionExtConfigs.cronRule, () => {
-            ingestionPopulator.applyUpdates(err => {
-                // TODO
-                if (err) {
-                    log.error('failed to update ingestion readers', {
-                        method: 'IngestionPopulator.applyUpdates',
-                        error: err,
-                    });
-                    process.exit(1);
-                }
-                log.debug('updated active ingestion readers');
-                queueBatch(ingestionPopulator, taskState, qpConfig, log);
-            });
-        });
-        done();
-    },
-    done => {
-        healthServer.onReadyCheck(log => {
-            const state = ingestionPopulator.zkStatus();
-            if (state.code === zookeeper.State.SYNC_CONNECTED.code) {
-                return true;
-            }
-            log.error(`Zookeeper is not connected! ${state}`);
-            return false;
-        });
-        log.info('Starting HealthProbe server');
-        healthServer.start();
-        done();
-    },
-], err => {
-    if (err) {
-        log.error('error during ingestion populator initialization', {
-            method: 'IngestionPopulator::task',
-            error: err,
-        });
-        process.exit(1);
-    }
+function initAndStart() {
+    // NOTE: using replication service account
+    const sourceConfig = config.extensions.replication.source;
+    initManagement({
+        serviceName: 'replication',
+        serviceAccount: sourceConfig.auth.account,
+    }, error => {
+        if (error) {
+            log.error('could not load management db', { error });
+            setTimeout(initAndStart, 5000);
+            return;
+        }
+        log.info('management init done');
 
-    // TODO: dynamic add/remove checks here
-});
+        async.waterfall([
+            done => ingestionPopulator.open(done),
+            // on init, setup active sources ingestion readers
+            done => initIngestionReaders(ingestionPopulator, done),
+            done => {
+                const taskState = {
+                    batchInProgress: false,
+                };
+                schedule.scheduleJob(ingestionExtConfigs.cronRule, () => {
+                    ingestionPopulator.applyUpdates(err => {
+                        if (err) {
+                            log.error('failed to update ingestion readers', {
+                                method: 'IngestionPopulator.applyUpdates',
+                                error: err,
+                            });
+                            process.exit(1);
+                        }
+                        log.debug('updated active ingestion readers');
+                        queueBatch(ingestionPopulator, taskState, qpConfig,
+                            log);
+                    });
+                });
+                done();
+            },
+            done => {
+                healthServer.onReadyCheck(log => {
+                    const state = ingestionPopulator.zkStatus();
+                    if (state.code === zookeeper.State.SYNC_CONNECTED.code) {
+                        return true;
+                    }
+                    log.error(`Zookeeper is not connected! ${state}`);
+                    return false;
+                });
+                log.info('Starting HealthProbe server');
+                healthServer.start();
+                done();
+            },
+        ], err => {
+            if (err) {
+                log.error('error during ingestion populator initialization', {
+                    method: 'IngestionPopulator::task',
+                    error: err,
+                });
+                process.exit(1);
+            }
+        });
+    });
+}
+
+initAndStart();
 
 process.on('SIGTERM', () => {
     log.info('received SIGTERM, exiting');
